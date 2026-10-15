@@ -1,9 +1,32 @@
-# Builder-first release process
+# Release process
 
-This file is the authority for FM4 release contents and review. The only
-public release artifact currently authorized by the repository is a
-deterministic source archive plus its SHA-256 checksum. Do not publish any
-artifact until the project owner approves its exact contents and workflow.
+The primary public download is a ready-to-run `fm4-recomp-<version>-win-x64.zip`
+with its SHA-256 checksum. Optional source archives remain available for rebuilding.
+The source repository stays free of compiled binaries and game data.
+
+## Player package
+
+Build the release's exact title sources against the pinned public SDK. Package only
+`fm4.exe`, both generated facade DLLs, `rexruntime.dll`, `rexgpu-xenos.dll`,
+`TracyClient.dll`, app-local Visual C++ redistributable DLLs, configuration,
+launcher, player instructions, manifest and license notices.
+Do not copy a complete development build directory.
+Game files, original XEX files, DLC, Xbox system files, profiles, shader caches,
+logs, PDBs and raw generated C++ must not enter this ZIP.
+
+```powershell
+& .\tools\New-BinaryRelease.ps1 -BuildRoot 'D:\Builds\FM4' -SdkSourceRoot 'D:\Sources\rexglue-sdk' -OutputDirectory 'D:\Releases' -Version '0.1.0-alpha.2'
+```
+
+The destination package directory must be new. The packager copies named outputs,
+adds the compiler installation's app-local CRT and dependency notices, writes a
+file manifest, then creates the ZIP and checksum. Before uploading, inspect ZIP
+entries, verify every PE file is AMD64 and its imports resolve, test the extracted
+launcher and confirm the three required game-input identities. Record fresh build
+and startup evidence separately from historical gameplay qualification.
+Use the full-readback native-1x defaults and document the current performance limits.
+The release body must link the player ZIP first and label the source kit as optional.
+See [player instructions](PLAYING.md).
 
 ## GitHub automation
 
@@ -39,7 +62,7 @@ A failed check prevents draft creation.
 The workflow rejects a version whose Git tag already exists.
 Local source checks use temporary packaging directories and replace only the matching candidate ZIP and checksum after success.
 
-## Public artifact boundary
+## Source artifact boundary
 
 The source archive is built from the exact paths in
 [`release/source-files.txt`](../release/source-files.txt). The policy and
@@ -76,7 +99,7 @@ The packager writes a ZIP with sorted entries, no compression, and a fixed
 entry timestamp. It also writes `<archive>.sha256`. Identical source bytes,
 version, repository URL, and commit identity produce identical archives.
 
-## Review gate
+## Source review gate
 
 Before publication:
 

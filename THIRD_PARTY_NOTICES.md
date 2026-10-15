@@ -1,8 +1,8 @@
 # Third-party software notices
 
-The FM4 source release does not contain third-party binaries or generated game
-translation. It references and locally builds the following direct
-dependency:
+The source archive references and locally builds the following dependency.
+The win-x64 player ZIP includes its runtime DLLs and retains license texts
+under `licenses`:
 
 - [ReXGlue SDK](https://github.com/Alexbeav/rexglue-sdk), pinned by
   `release/release-policy.json`, is licensed under the BSD 3-Clause License.
@@ -14,7 +14,9 @@ The pinned SDK checkout is the authority for the complete dependency list and
 the license texts applicable to a local build. Anyone who redistributes SDK
 files or locally produced binaries must preserve the notices and satisfy the
 licenses shipped with that exact SDK source. The FM4 source packager does not
-package those files.
+package those files. The player packager includes runtime DLLs, their notices,
+and app-local Microsoft Visual C++ redistributable DLLs from the compiler installation.
+Microsoft runtime source is not part of this project; those DLLs retain Microsoft's redistribution terms.
 
 ## Project artwork
 

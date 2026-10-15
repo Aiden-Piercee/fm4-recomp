@@ -25,16 +25,17 @@ translation is created only on the user's computer, under `fm4/generated`,
 and is excluded from source archives and version control. This project makes
 no license grant for that generated output.
 
-Public releases use the builder-first process in
-[`RELEASING.md`](RELEASING.md). They do not include a precompiled FM4
-executable or recompiled facade DLLs. Shipping a linked binary would require a
-separate rights and GPL compliance review; the release scripts do not provide
-that path.
+Public player releases include the linked FM4 executable, recompiled facade DLLs
+and required runtime DLLs. They exclude the original Xbox executables, disc images,
+game assets, DLC, Xbox system files and saves. Users must supply their own game files.
+The project makes no separate license grant for game-derived translation or linked
+game code. The project's independently authored code and dependency notices remain
+subject to their stated licenses. See [release contents](RELEASING.md).
 
 ## Dependencies
 
 The local builder obtains the pinned ReXGlue SDK source and builds it on the
-user's computer. ReXGlue and its dependencies keep their own licenses and
+user's computer. The player ZIP supplies the matching runtime DLLs and license texts. ReXGlue and its dependencies keep their own licenses and
 notices. See [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 This document records the project's release policy. It is not legal advice.

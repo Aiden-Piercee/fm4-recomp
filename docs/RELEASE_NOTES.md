@@ -1,20 +1,18 @@
 # Release notes
 
-## Source kit and GitHub automation
+## Windows x64 player download
 
-This experimental source kit requires a local build before you can play.
-Download the named source ZIP asset and extract it into a local folder.
-Follow the [setup and build instructions](https://github.com/Alexbeav/fm4-recomp/blob/main/README.md#download-and-start-here).
+The main alpha.2 download is `fm4-recomp-0.1.0-alpha.2-win-x64.zip`.
+It contains the executable, both facade modules, required runtime DLLs,
+app-local Visual C++ runtime, launcher and setup instructions. No local build is required.
+Supply your own complete extracted Europe Game of the Year game files.
+The ZIP contains no game files, DLC, Xbox system files or saves.
+The source kit is an optional developer download.
+See [player setup](https://github.com/Alexbeav/fm4-recomp/blob/main/docs/PLAYING.md).
 
-The kit requires Windows x64, PowerShell 7, the documented compiler tools,
-and your own extracted Europe Game of the Year copy of Forza Motorsport 4.
-It contains no game data, generated translation, SDK binaries, or playable executable.
-The license is `GPL-3.0-only` within the [content boundary](https://github.com/Alexbeav/fm4-recomp/blob/main/docs/LEGAL.md).
-
-GitHub now checks source packaging on pushes and pull requests.
-Maintainers can prepare a draft with the tested archive and SHA-256 checksum.
-The release allowlist now includes the project and acceptance manifests.
-These changes do not change game code or the validated SDK pin.
+This packages a fresh build of the alpha.2 title source against the retained
+public SDK f16992c baseline. It adds no renderer or performance fix.
+Build and dependency checks do not establish fresh gameplay acceptance.
 
 ## Tested behavior and limits
 
@@ -29,8 +27,7 @@ The conservative graphics configuration can stutter and run at about 30 FPS.
 Higher resolution and timing overrides caused visual corruption in earlier tests.
 See [current status](https://github.com/Alexbeav/fm4-recomp/blob/main/docs/STATUS.md) for the full tested boundary.
 
-Source CI checks packaging only. A new local build and gameplay review remain
-required before publication of a new release.
+Source CI checks source packaging only. It does not qualify player binaries or gameplay.
 
 ## v0.1.0-alpha.1
 

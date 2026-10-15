@@ -39,3 +39,7 @@ tools/Test-RepositoryBoundary.ps1
 tools/Test-SourceRelease.ps1
 validation/acceptance.toml
 validation/runs/.gitkeep
+
+Launch FM4 Player.bat
+docs/PLAYING.md
+tools/New-BinaryRelease.ps1

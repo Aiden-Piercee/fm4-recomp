@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "distribution_model": "builder-first",
+  "distribution_model": "binary-and-source",
   "project_license": "GPL-3.0-only",
   "source_allowlist": "release/source-files.txt",
   "maximum_source_file_bytes": 52428800,
