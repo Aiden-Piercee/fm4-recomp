@@ -33,6 +33,15 @@ Use the default guest vblank rate. The validated GPU and runtime were built
 from the SDK fork at
 [`f16992c`](https://github.com/Alexbeav/rexglue-sdk/commit/f16992c92e610c2d71773994436b442d9946f4e1).
 
+## Experimental performance profile
+
+`Launch FM4 (Performance 1440p).bat` runs 2x internal resolution on the opt-in
+native render-target path with the settings in
+[Performance options](PERFORMANCE.md). In the tested races on an RX 7900 XTX it
+held 60 FPS without race hitches. It uses previous-frame (`fast`) resolve
+readback and has not been through the validation above, so the validated
+graphics profile stays unchanged.
+
 ## Known issues
 
 - Car-thumbnail generation is under investigation. A fresh isolated profile

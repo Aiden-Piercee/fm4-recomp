@@ -157,3 +157,23 @@ vblank_precise_timer = true
   it made frame pacing worse.
 - The texture budget assumes a GPU with plenty of memory. Lower the limits on
   smaller GPUs.
+
+## Measurements
+
+Windows, Radeon RX 7900 XTX, 2x internal resolution on the native path, the
+same car and track, two-lap races with AI, 60-swap `frame_time_stats` windows.
+Each row adds to the one before. "Hitches" are race frames over 34 ms.
+
+| Step | Result |
+|---|---|
+| Deferred + early-submit readback, stencil-ref transfers | Most of the race near 60 FPS, but 25-30 hitches of 40-60 ms per race, at the same track spots every lap; mostly texture work |
+| Larger texture cache budget | Track textures no longer evicted (0 evictions); hitches now from creating new textures, about 0.45 ms each |
+| Placed texture heaps | Hitches 29 -> 15 per race; 197 new textures in one frame 85 ms -> 3.7 ms |
+| `readback_resolve = "fast"` | 0 hitches in the race; GPU wait per frame about 7 ms -> 0 ms |
+| Default (60 Hz) guest vblank rate | Race held 60.0 FPS from start to finish; 2 frames over 34 ms |
+| `vblank_precise_timer` | Frames over 17.5 ms per second 11.4 -> 5.5; 99th percentile 19.2 -> 18.0 ms; 0 frames over 34 ms |
+
+Menus, Autovista and the pre-race grid run at 30 FPS by the game's own pacing.
+Loading screens still show freezes of about 1 second in resolve work, and the
+first seconds of a race still have a short burst of slow frames. These results
+come from one machine and one track and do not replace the validated profile.

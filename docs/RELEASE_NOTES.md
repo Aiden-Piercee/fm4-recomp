@@ -1,5 +1,19 @@
 # Release notes
 
+## Unreleased (in development)
+
+Not yet part of a release. All of these are opt-in; the validated profile is
+unchanged. See [Performance options](PERFORMANCE.md).
+
+- The builder applies project-owned SDK patches from `sdk-patches/` on top of
+  the pinned SDK, and `-SdkOnly` rebuilds just the GPU plugin.
+- `Run-Local.ps1 -RuntimeArgs` sets runtime options for one launch.
+- SDK patches: deferred and early-submitted resolve readback, a native
+  render-target path ported from shiftglue-sdk (BSD-3-Clause), frame-time and
+  hitch diagnostics, placed texture heaps and a precise guest vblank timer.
+- `Launch FM4 (Performance 1440p).bat`: an experimental 2x profile that held
+  60 FPS in the tested races.
+
 ## Windows x64 player download
 
 The main alpha.2 download is `fm4-recomp-0.1.0-alpha.2-win-x64.zip`.
