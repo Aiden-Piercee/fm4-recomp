@@ -21,3 +21,4 @@ pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOn
 - `0002-native-executor.patch`: opt-in native render-target path (`render_target_path_d3d12 = "native"`), ported from shiftglue-sdk (BSD-3-Clause, see `THIRD_PARTY_NOTICES.md`). Also adds `native_executor_stencil_ref_transfers` and the `frame_time_stats` log lines.
 - `0003-d3d12-readback-early-submit.patch`: `d3d12_readback_resolve_early_submit` submits the readback copy right away and waits only for that submission.
 - `0004-frame-hitch-log.patch`: `frame_hitch_log_ms` logs a breakdown of every frame slower than the threshold.
+- `0005-hitch-cpu-breakdown.patch`: hitch lines also break command-processor CPU time down by work type.

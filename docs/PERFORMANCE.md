@@ -64,3 +64,15 @@ frame hitch #4858: 68.7 ms, 8 vblanks | cp idle 0.0 ms (waiting for the game), w
 guest-requested stalls, `gpu wait` is the command processor waiting for the
 host GPU, and `cp busy` is the rest: command processing on the CPU. A
 separate log file per run (`--log_file=...`) keeps runs comparable.
+
+With SDK patch 0005, each hitch line also lists where the command
+processor's CPU time went (categories of at least 0.5 ms) and how many draws,
+resolves and submissions the frame had:
+
+```text
+... cp busy 62.1 ms | cpu ms: primitives=1.6 textures=47.1 vertex_buffers=0.9 resolves=6.7 submit=1.4 | draws=970 resolves=41 submissions=40
+```
+
+The categories are `primitives`, `targets`, `pipelines`, `textures`,
+`bindings`, `vertex_buffers`, `resolves`, `swap` and `submit`. Timing is only
+taken while `frame_hitch_log_ms` is set.
