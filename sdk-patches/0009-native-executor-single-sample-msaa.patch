@@ -1,0 +1,159 @@
+Subject: perf(d3d12): optional single-sample MSAA surfaces for the native executor
+
+native_executor_single_sample_msaa (default off) keeps the guest's 2x/4x MSAA
+EDRAM layout but creates those surfaces, and the host pipelines that draw into
+them, with one sample. Transfers, resolves and the words path read and write
+them through host sample mode 3 (guest samples map to host sample 0), which the
+native EDRAM shaders already support.
+
+On weak GPUs this removes most multisampled transfer and resolve bandwidth, at
+the cost of anti-aliasing.
+---
+diff --git a/include/rex/graphics/d3d12/native_executor.h b/include/rex/graphics/d3d12/native_executor.h
+index ee310ee..ad4550a 100644
+--- a/include/rex/graphics/d3d12/native_executor.h
++++ b/include/rex/graphics/d3d12/native_executor.h
+@@ -94,6 +94,8 @@ class NativeExecutor {
+   ~NativeExecutor();
+ 
+   bool Initialize(const NativeExecutorConfig& config);
++  // native_executor_single_sample_msaa: guest MSAA surfaces have one host sample.
++  bool single_sample_msaa() const { return single_sample_msaa_; }
+   void Shutdown();
+ 
+   // Before the targets are bound for a draw: derives the surfaces the draw
+@@ -221,6 +223,9 @@ class NativeExecutor {
+   void ClaimTileRect(const SurfaceKey& key, uint32_t column_first, uint32_t row_first,
+                      uint32_t column_end, uint32_t row_end);
+   ID3D12PipelineState* GetTransferPipeline(const TransferPipelineKey& key);
++  // Host sample mode of a surface's layout constant (see native_edram.hlsli):
++  // 0 as the guest, 1 native 2x, 2 2x stored as 4x, 3 MSAA over one sample.
++  static uint32_t HostSampleMode(const Surface& surface);
+   uint32_t LayoutConstant(const Surface& surface) const;
+   // Splits the resolve's pixel rectangle into rectangles per owning surface.
+   void GetResolveSources(const SurfaceKey& resolve_key, int32_t x0, int32_t y0, int32_t x1,
+@@ -230,6 +235,7 @@ class NativeExecutor {
+   // (SV_StencilRef), native_executor_stencil_ref_transfers.
+   static constexpr uint32_t kTransferDestDepthStencilRef = 32;
+   bool stencil_ref_transfers_ = false;
++  bool single_sample_msaa_ = false;
+   Microsoft::WRL::ComPtr<ID3DBlob> stencil_ref_transfer_ps_[2];  // [dest msaa]
+   // Runtime HLSL compilation with D3DCompiler_47.dll (null on failure).
+   Microsoft::WRL::ComPtr<ID3DBlob> CompileRuntimeShader(const char* source, size_t source_size,
+diff --git a/include/rex/graphics/d3d12/pipeline_cache.h b/include/rex/graphics/d3d12/pipeline_cache.h
+index 7a9d6a2..1877884 100644
+--- a/include/rex/graphics/d3d12/pipeline_cache.h
++++ b/include/rex/graphics/d3d12/pipeline_cache.h
+@@ -97,7 +97,12 @@ class PipelineCache {
+     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
+   }
+ 
++  // Create host pipelines with one sample whatever the guest MSAA mode (for
++  // render target paths that keep MSAA surfaces single-sampled).
++  void SetForceSingleSample(bool force) { force_single_sample_ = force; }
++
+  private:
++  bool force_single_sample_ = false;
+   REXPACKEDSTRUCT(ShaderStoredHeader, {
+     uint64_t ucode_data_hash;
+ 
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index c392911..12a5895 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -1266,6 +1266,9 @@ bool D3D12CommandProcessor::SetupContext() {
+     REXGPU_ERROR("Failed to initialize the graphics pipeline cache");
+     return false;
+   }
++  if (native_executor_ && native_executor_->single_sample_msaa()) {
++    pipeline_cache_->SetForceSingleSample(true);
++  }
+ 
+   D3D12_HEAP_FLAGS heap_flag_create_not_zeroed = provider.GetHeapFlagCreateNotZeroed();
+ 
+diff --git a/src/graphics/d3d12/native_executor.cpp b/src/graphics/d3d12/native_executor.cpp
+index 18b6cae..1db3ebe 100644
+--- a/src/graphics/d3d12/native_executor.cpp
++++ b/src/graphics/d3d12/native_executor.cpp
+@@ -52,6 +52,12 @@ REXCVAR_DEFINE_BOOL(native_executor_stencil_ref_transfers, false, "GPU/D3D12",
+                     "instead of a depth pass plus up to eight per-bit stencil passes")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++REXCVAR_DEFINE_BOOL(native_executor_single_sample_msaa, false, "GPU/D3D12",
++                    "Native executor: keep the guest's 2x/4x MSAA layout but render those "
++                    "surfaces with a single host sample. Removes most multisampled transfer and "
++                    "resolve work on weak GPUs at the cost of anti-aliasing")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ REXCVAR_DEFINE_BOOL(native_executor_gpu_profile, false, "GPU/D3D12",
+                     "Native executor: log GPU milliseconds per frame of all submissions and of "
+                     "the executor's transfers, resolves and clears, and the resolve read-back "
+@@ -339,6 +345,10 @@ bool NativeExecutor::Initialize(const NativeExecutorConfig& config) {
+     return false;
+   }
+   if (!config_.trace_writer) return false;
++  single_sample_msaa_ = REXCVAR_GET(native_executor_single_sample_msaa);
++  if (single_sample_msaa_) {
++    REXGPU_INFO("Native executor: MSAA surfaces use a single host sample");
++  }
+   if (REXCVAR_GET(native_executor_stencil_ref_transfers)) {
+     if (provider.IsPSSpecifiedStencilReferenceSupported()) {
+       stencil_ref_transfers_ = true;
+@@ -510,7 +520,8 @@ NativeExecutor::Surface* NativeExecutor::GetOrCreateSurface(const SurfaceKey& ke
+   surface.key = key;
+   surface.width = key.pitch_tiles * (xenos::kEdramTileWidthSamples >> msaa_x_log2);
+   surface.height = SurfaceHeight(key.pitch_tiles, key.msaa);
+-  surface.samples = key.msaa == uint32_t(xenos::MsaaSamples::k2X) && !config_.msaa_2x_supported
++  surface.samples = single_sample_msaa_ ? 1u
++                    : key.msaa == uint32_t(xenos::MsaaSamples::k2X) && !config_.msaa_2x_supported
+                         ? 4
+                         : 1u << key.msaa;
+   D3D12_RESOURCE_DESC desc = {};
+@@ -603,10 +614,20 @@ void NativeExecutor::MarkTileStencil(uint32_t base, uint32_t length, bool nonzer
+   tiles_.MarkStencil(base, length, nonzero);
+ }
+ 
++uint32_t NativeExecutor::HostSampleMode(const Surface& surface) {
++  const SurfaceKey& key = surface.key;
++  if (key.msaa != uint32_t(xenos::MsaaSamples::k1X) && surface.samples == 1) {
++    return 3u;  // Guest MSAA layout over a single host sample.
++  }
++  if (key.msaa == uint32_t(xenos::MsaaSamples::k2X)) {
++    return surface.samples == 4 ? 2u : 1u;
++  }
++  return 0u;
++}
++
+ uint32_t NativeExecutor::LayoutConstant(const Surface& surface) const {
+   const SurfaceKey& key = surface.key;
+-  const uint32_t host_sample_mode =
+-      key.msaa == uint32_t(xenos::MsaaSamples::k2X) ? (surface.samples == 4 ? 2u : 1u) : 0u;
++  const uint32_t host_sample_mode = HostSampleMode(surface);
+   return PackLayout(key.base_tiles, key.pitch_tiles, key.msaa, key.Is64bpp(), key.is_depth,
+                     key.format) |
+          (host_sample_mode << 27);
+@@ -1514,8 +1535,7 @@ bool NativeExecutor::ResolveToMemory(const SourceRect& source, const SurfaceKey&
+   command_processor_.SubmitBarriers();
+ 
+   const SurfaceKey& owner = surface.key;
+-  const uint32_t host_sample_mode =
+-      owner.msaa == uint32_t(xenos::MsaaSamples::k2X) ? (surface.samples == 4 ? 2u : 1u) : 0u;
++  const uint32_t host_sample_mode = HostSampleMode(surface);
+   const D3D12_RECT rect = unscaled_dest ? source.rect : HostRect(source.rect);
+   uint32_t constants[kResolveMemoryConstantCount];
+   constants[0] = uint32_t(rect.left) | (uint32_t(rect.top) << 16);
+diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
+index 8e6b854..7429e23 100644
+--- a/src/graphics/d3d12/pipeline_cache.cpp
++++ b/src/graphics/d3d12/pipeline_cache.cpp
+@@ -1580,6 +1580,10 @@ bool PipelineCache::GetCurrentStateDescription(
+       host_msaa_samples = xenos::MsaaSamples::k4X;
+     }
+   } else {
++    if (force_single_sample_) {
++      // The native executor keeps guest MSAA surfaces single-sampled.
++      host_msaa_samples = xenos::MsaaSamples::k1X;
++    }
+     if (!(bound_depth_and_color_render_target_bits & ~uint32_t(1)) &&
+         !depth_stencil_bound_and_used) {
+       // Direct3D 12 requires the sample count to be 1 when no color or depth /

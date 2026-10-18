@@ -124,6 +124,21 @@ remain, then yields until the vblank is due. At a locked 60 FPS this halved the
 frames that arrived late (over 17.5 ms), at the cost of a little CPU time on
 the vblank thread.
 
+## Single-sample MSAA surfaces
+
+```toml
+native_executor_single_sample_msaa = true
+```
+
+Native path only. FM4 draws most of its scene into 2x and 4x MSAA surfaces, and
+copying those between EDRAM layouts is most of the GPU time on integrated GPUs.
+This setting keeps the guest layout but creates the surfaces with one sample, so
+the copies move a fraction of the data. Edges are no longer anti-aliased;
+`swap_post_effect = "fxaa"` softens them a little.
+
+On a Ryzen 5000U laptop (Vega iGPU) at 1x it cut GPU time per frame from
+36-44 ms to about 27 ms (about 31 FPS), but the jagged edges are very visible.
+
 ## Experimental 1440p profile
 
 `Launch FM4 (Performance 1440p).bat` combines the settings above for 2x
