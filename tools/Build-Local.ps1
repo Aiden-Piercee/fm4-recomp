@@ -112,6 +112,9 @@ foreach ($patch in $sdkPatches) {
     Invoke-CheckedNative -FilePath $git -ArgumentList @("apply", "--whitespace=nowarn", $patch) -WorkingDirectory $sdkSource
     Write-Host "Applied SDK patch: $([IO.Path]::GetFileName($patch))"
 }
+# The native executor's shaders (sdk-patches/0002) are committed as HLSL only;
+# compile them into the DXBC headers the SDK includes.
+& (Join-Path $PSScriptRoot "Build-NativeShaders.ps1") -SdkSourceRoot $sdkSource
 
 $sdkBuild = Join-Path $localRoot "sdk-build"
 $sdkInstall = Join-Path $localRoot "sdk-install"

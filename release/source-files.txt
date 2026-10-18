@@ -33,8 +33,10 @@ project-manifest.toml
 release/release-policy.json
 release/source-files.txt
 sdk-patches/0001-d3d12-deferred-readback-sync.patch
+sdk-patches/0002-native-executor.patch
 sdk-patches/README.md
 tools/Build-Local.ps1
+tools/Build-NativeShaders.ps1
 tools/New-SourceRelease.ps1
 tools/Release.Common.ps1
 tools/Run-Local.ps1

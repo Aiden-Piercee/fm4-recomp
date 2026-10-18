@@ -18,3 +18,4 @@ pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOn
 ## Series
 
 - `0001-d3d12-deferred-readback-sync.patch`: `d3d12_readback_resolve_deferred_sync` waits for resolve readback once per guest-visible sync point instead of after every resolve.
+- `0002-native-executor.patch`: opt-in native render-target path (`render_target_path_d3d12 = "native"`), ported from shiftglue-sdk (BSD-3-Clause, see `THIRD_PARTY_NOTICES.md`). Also adds `native_executor_stencil_ref_transfers` and the `frame_time_stats` log lines.

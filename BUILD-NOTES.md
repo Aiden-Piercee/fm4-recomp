@@ -84,3 +84,11 @@ settings for one launch without editing `fm4/fm4_runtime.toml`. The overrides
 are written to the top of the deployed `fm4.toml`, because the runtime applies
 the config file after the command line. `--name` sets `true`, `--no-name`
 sets `false`.
+
+## Native executor shaders
+
+`sdk-patches/0002` adds the native executor's HLSL shaders but no compiled
+bytecode. After applying the patches, `tools/Build-NativeShaders.ps1` compiles
+them into `src/graphics/shaders/bytecode/d3d12_5_1/native_*.h` in the SDK
+checkout with `fxc.exe` from the Windows SDK, and skips shaders whose headers
+are newer than the sources. Set `FM4_FXC` to use a specific `fxc.exe`.
