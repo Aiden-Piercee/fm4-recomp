@@ -76,3 +76,11 @@ previously applied series first, so editing or adding a patch takes effect on
 the next build. `-SdkOnly` rebuilds only the SDK and refreshes
 `rexgpu-xenos.dll` in an existing local build. See
 [`sdk-patches/README.md`](sdk-patches/README.md).
+
+## Per-run runtime settings
+
+`tools/Run-Local.ps1 -RuntimeArgs "--name=value,--other=value"` changes runtime
+settings for one launch without editing `fm4/fm4_runtime.toml`. The overrides
+are written to the top of the deployed `fm4.toml`, because the runtime applies
+the config file after the command line. `--name` sets `true`, `--no-name`
+sets `false`.
