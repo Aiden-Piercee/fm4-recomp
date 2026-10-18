@@ -4,6 +4,8 @@
 .gitignore
 BUILD-NOTES.md
 LICENSE
+Launch FM4 (Low-end 720p, 2x AA).bat
+Launch FM4 (Low-end 720p, no AA).bat
 Launch FM4 (Performance 1440p).bat
 Launch FM4 (Performance 4K).bat
 Launch FM4 Disc 2 Install.bat

@@ -213,3 +213,33 @@ held 60 FPS: frames averaged 16.7 ms with a 99th percentile of 20.7 ms, 4 race
 frames went over 34 ms, and the game still waited about 12 ms of each frame
 for the next vblank, so there was headroom left. This was one shorter race,
 and it needs a GPU in that class.
+
+## Experimental low-end profile
+
+For integrated GPUs, two launchers run the native path at 1x (1280x720) with
+fast readback and a smaller texture budget:
+
+- `Launch FM4 (Low-end 720p, 2x AA).bat`: `native_executor_max_msaa_samples = 2`.
+  Not yet tested on an integrated GPU.
+- `Launch FM4 (Low-end 720p, no AA).bat`: single-sample surfaces plus FXAA.
+  About 31 FPS on a Ryzen 5000U laptop, with visible jagged edges.
+
+Both share these settings:
+
+```toml
+render_target_path_d3d12 = "native"
+resolution_scale = 1
+d3d12_readback_resolve_deferred_sync = true
+d3d12_readback_resolve_early_submit = true
+native_executor_stencil_ref_transfers = true
+texture_cache_memory_limit_soft = 1024
+texture_cache_memory_limit_hard = 1536
+texture_cache_memory_limit_soft_lifetime = 120
+d3d12_texture_placed_heaps = true
+d3d12_texture_heap_prealloc_mb = 256
+readback_resolve = "fast"
+```
+
+Integrated GPUs share system memory, so the texture budget is kept small. For a
+steadier frame rate below 60 FPS, `vblank_frequency_override = 30` paces the
+game at 30 FPS; this is experimental.
