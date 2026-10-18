@@ -76,3 +76,25 @@ resolves and submissions the frame had:
 The categories are `primitives`, `targets`, `pipelines`, `textures`,
 `bindings`, `vertex_buffers`, `resolves`, `swap` and `submit`. Timing is only
 taken while `frame_hitch_log_ms` is set.
+
+SDK patch 0006 splits the texture time further:
+
+```text
+| tex: create=3.7ms/197 upload=7.4ms/40.4MB scaled_commit=0.0ms load=0.2ms/222 (30 scaled) evicted=0 cache=505MB
+```
+
+`create` is host texture creation (time/count), `upload` copying guest memory
+to the GPU, `scaled_commit` committing scaled-resolve memory, `load` the
+untiling dispatches, `evicted` textures dropped by the cache budget, and
+`cache` the cache's current size.
+
+## Texture cache budget
+
+The texture cache's defaults (`texture_cache_memory_limit_soft = 384`,
+`texture_cache_memory_limit_hard = 768`,
+`texture_cache_memory_limit_soft_lifetime = 30`) evict textures that were not
+used for 30 seconds once the cache is over the soft limit. At 2x, FM4's race
+textures pass that limit early, and a lap takes longer than 30 seconds, so
+track textures were destroyed and recreated on every lap. On a GPU with plenty
+of memory, a larger budget removes those evictions, for example
+`--texture_cache_memory_limit_soft=4096,--texture_cache_memory_limit_hard=8192,--texture_cache_memory_limit_soft_lifetime=600`.

@@ -22,3 +22,4 @@ pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOn
 - `0003-d3d12-readback-early-submit.patch`: `d3d12_readback_resolve_early_submit` submits the readback copy right away and waits only for that submission.
 - `0004-frame-hitch-log.patch`: `frame_hitch_log_ms` logs a breakdown of every frame slower than the threshold.
 - `0005-hitch-cpu-breakdown.patch`: hitch lines also break command-processor CPU time down by work type.
+- `0006-hitch-texture-breakdown.patch`: hitch lines also break texture time into create/upload/load and count evictions.
