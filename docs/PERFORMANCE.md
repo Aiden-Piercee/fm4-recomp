@@ -98,3 +98,18 @@ textures pass that limit early, and a lap takes longer than 30 seconds, so
 track textures were destroyed and recreated on every lap. On a GPU with plenty
 of memory, a larger budget removes those evictions, for example
 `--texture_cache_memory_limit_soft=4096,--texture_cache_memory_limit_hard=8192,--texture_cache_memory_limit_soft_lifetime=600`.
+
+## Placed texture heaps
+
+`d3d12_texture_placed_heaps` (SDK patch 0007, default off). FM4 streams track
+textures in while driving, and each new texture used to be its own
+`CreateCommittedResource`, which costs about 0.5 ms on the tested AMD driver.
+A frame that streams 150-200 textures then stalls for 80 ms or more. With this
+setting textures are placed in large heaps created up front, and freed ranges
+are reused once the GPU is done with them. Creating 197 textures in one frame
+dropped from about 85 ms to 3.7 ms.
+
+- `d3d12_texture_heap_size_mb` (default 64): size of each heap. Textures larger
+  than half a heap still get their own committed resource.
+- `d3d12_texture_heap_prealloc_mb` (default 0): heap memory to create at
+  startup, so heap creation does not happen during a race.

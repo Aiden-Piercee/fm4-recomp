@@ -38,6 +38,7 @@ sdk-patches/0003-d3d12-readback-early-submit.patch
 sdk-patches/0004-frame-hitch-log.patch
 sdk-patches/0005-hitch-cpu-breakdown.patch
 sdk-patches/0006-hitch-texture-breakdown.patch
+sdk-patches/0007-d3d12-placed-texture-heaps.patch
 sdk-patches/README.md
 tools/Build-Local.ps1
 tools/Build-NativeShaders.ps1
