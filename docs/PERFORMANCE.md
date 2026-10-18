@@ -42,3 +42,11 @@ runtime Xenos-to-DXBC translator.
 
 The executor is ported from shiftglue-sdk; see
 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
+## Early submit for deferred readback
+
+`d3d12_readback_resolve_early_submit` (SDK patch 0003, needs deferred sync).
+The deferred sync point used to wait for every queued GPU operation, including
+draws recorded after the resolve. With this setting the command list is closed
+right after the copy into guest RAM, and the sync point waits only for the
+submission holding the latest copy, which has usually finished by then.

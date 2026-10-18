@@ -34,6 +34,7 @@ release/release-policy.json
 release/source-files.txt
 sdk-patches/0001-d3d12-deferred-readback-sync.patch
 sdk-patches/0002-native-executor.patch
+sdk-patches/0003-d3d12-readback-early-submit.patch
 sdk-patches/README.md
 tools/Build-Local.ps1
 tools/Build-NativeShaders.ps1
