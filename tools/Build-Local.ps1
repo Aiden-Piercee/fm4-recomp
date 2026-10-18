@@ -3,7 +3,10 @@ param(
     [Parameter(Mandatory)][string]$GameDataRoot,
     [ValidateRange(1, 64)][int]$Jobs = 2,
     [string]$SdkSourceRoot,
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    # Rebuild only the (patched) SDK and refresh the GPU plugin in the existing
+    # FM4 build. Skips code generation and the full FM4 rebuild.
+    [switch]$SdkOnly
 )
 
 . (Join-Path $PSScriptRoot "Release.Common.ps1")
@@ -51,13 +54,63 @@ $sdkHead = (& $git -C $sdkSource rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $sdkHead -ne $policy.sdk.commit) {
     throw "SDK checkout is not at the required commit $($policy.sdk.commit): $sdkHead"
 }
+
+# Project-owned SDK patches (sdk-patches/*.patch) are applied in name order on
+# top of the pinned commit. They are normalized to LF under .local so Git
+# line-ending settings cannot break them. Any other SDK modification is refused.
+$sdkPatchSourceRoot = Join-Path $root "sdk-patches"
+$sdkPatchSources = @(if (Test-Path -LiteralPath $sdkPatchSourceRoot -PathType Container) {
+    Get-ChildItem -LiteralPath $sdkPatchSourceRoot -Filter "*.patch" -File | Sort-Object Name
+})
+$sdkPatchWorkRoot = Join-Path $localRoot "sdk-patches"
+if (Test-Path -LiteralPath $sdkPatchWorkRoot) {
+    Remove-Item -LiteralPath $sdkPatchWorkRoot -Recurse -Force
+}
+[IO.Directory]::CreateDirectory($sdkPatchWorkRoot) | Out-Null
+$sdkPatches = @($sdkPatchSources | ForEach-Object {
+    $normalizedPatch = Join-Path $sdkPatchWorkRoot $_.Name
+    $patchText = [IO.File]::ReadAllText($_.FullName).Replace("`r`n", "`n")
+    [IO.File]::WriteAllText($normalizedPatch, $patchText, [Text.UTF8Encoding]::new($false))
+    $normalizedPatch
+})
+
 $sdkDirty = @(& $git -C $sdkSource status --porcelain --untracked-files=no)
-if ($LASTEXITCODE -ne 0 -or $sdkDirty.Count -ne 0) {
-    throw "SDK checkout has tracked modifications. Refusing a non-pinned toolchain build."
+if ($LASTEXITCODE -ne 0) {
+    throw "git status failed for the SDK checkout."
+}
+if ($sdkDirty.Count -ne 0) {
+    if ($sdkPatches.Count -eq 0) {
+        throw "SDK checkout has tracked modifications. Refusing a non-pinned toolchain build."
+    }
+    # A previous build left the patches applied. Reverse them one at a time
+    # (later patches may touch lines next to earlier ones) and require a clean
+    # pinned tree afterwards, so the series below is always applied fresh.
+    $reversePatches = @($sdkPatches)
+    [array]::Reverse($reversePatches)
+    $reversed = New-Object System.Collections.Generic.List[string]
+    foreach ($patch in $reversePatches) {
+        & $git -C $sdkSource apply --reverse --check $patch 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            for ($i = $reversed.Count - 1; $i -ge 0; $i--) {
+                & $git -C $sdkSource apply $reversed[$i] 2>$null
+            }
+            throw "SDK checkout has tracked modifications that are not the project's sdk-patches ($([IO.Path]::GetFileName($patch)) does not reverse). Refusing a non-pinned toolchain build."
+        }
+        Invoke-CheckedNative -FilePath $git -ArgumentList @("apply", "--reverse", $patch) -WorkingDirectory $sdkSource
+        $reversed.Add($patch)
+    }
+    $sdkDirty = @(& $git -C $sdkSource status --porcelain --untracked-files=no)
+    if ($LASTEXITCODE -ne 0 -or $sdkDirty.Count -ne 0) {
+        throw "SDK checkout has tracked modifications beyond the project's sdk-patches. Refusing a non-pinned toolchain build."
+    }
 }
 $submoduleStatus = @(& $git -C $sdkSource submodule status --recursive)
 if ($LASTEXITCODE -ne 0 -or @($submoduleStatus | Where-Object { $_ -match "^[-+]" }).Count -ne 0) {
     throw "SDK submodules are missing or do not match the pinned SDK commit."
+}
+foreach ($patch in $sdkPatches) {
+    Invoke-CheckedNative -FilePath $git -ArgumentList @("apply", "--whitespace=nowarn", $patch) -WorkingDirectory $sdkSource
+    Write-Host "Applied SDK patch: $([IO.Path]::GetFileName($patch))"
 }
 
 $sdkBuild = Join-Path $localRoot "sdk-build"
@@ -82,6 +135,18 @@ Invoke-CheckedNative -FilePath $cmake -ArgumentList @(
 $rexglue = Join-Path $sdkInstall "bin/rexglue.exe"
 if (-not (Test-Path -LiteralPath $rexglue -PathType Leaf)) {
     throw "Pinned SDK build did not install rexglue.exe at $rexglue"
+}
+
+if ($SdkOnly) {
+    # The GPU plugin is loaded at runtime and its command processor is private
+    # to it, so it can be replaced without regenerating or relinking FM4.
+    $existingBuildRoot = Join-Path $localRoot "work/fm4/out/build/win-amd64-release"
+    if (-not (Test-Path -LiteralPath (Join-Path $existingBuildRoot "fm4.exe") -PathType Leaf)) {
+        throw "No existing FM4 build at $existingBuildRoot. Run Build-Local.ps1 without -SdkOnly first."
+    }
+    Copy-Item -LiteralPath (Join-Path $sdkInstall "bin/rexgpu-xenos.dll") -Destination $existingBuildRoot -Force
+    Write-Host "SDK rebuilt; refreshed rexgpu-xenos.dll in $existingBuildRoot"
+    return
 }
 
 $projectWorkRoot = Join-Path $localRoot "work"
@@ -164,6 +229,7 @@ $receipt = [ordered]@{
     project_worktree_dirty = $projectDirty
     sdk_repository = $policy.sdk.repository
     sdk_commit = $sdkHead
+    sdk_patches = @(if ($sdkPatchSources.Count -ne 0) { Get-Fm4FileRecords -Paths @($sdkPatchSources | ForEach-Object FullName) -BasePath $root })
     game_inputs = @($policy.required_game_inputs)
     artifacts = Get-Fm4FileRecords -Paths $artifacts -BasePath $buildRoot
 }

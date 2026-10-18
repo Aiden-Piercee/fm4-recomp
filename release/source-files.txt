@@ -31,6 +31,7 @@ fm4/xmediafacade_functions.toml
 project-manifest.toml
 release/release-policy.json
 release/source-files.txt
+sdk-patches/README.md
 tools/Build-Local.ps1
 tools/New-SourceRelease.ps1
 tools/Release.Common.ps1

@@ -67,3 +67,12 @@ update the main-image dispatch table.
 When the manifest's dynamic-module set changes, also rebuild
 `generated/default/module_registry.cpp`. Relinking with a stale registry can
 silently omit a facade DLL and fail only when the game first loads that module.
+
+## SDK patches
+
+The builder applies `sdk-patches/*.patch` in name order on top of the pinned
+SDK commit and refuses any other SDK modification. A rebuild reverses the
+previously applied series first, so editing or adding a patch takes effect on
+the next build. `-SdkOnly` rebuilds only the SDK and refreshes
+`rexgpu-xenos.dll` in an existing local build. See
+[`sdk-patches/README.md`](sdk-patches/README.md).
