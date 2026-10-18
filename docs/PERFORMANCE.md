@@ -50,3 +50,17 @@ The deferred sync point used to wait for every queued GPU operation, including
 draws recorded after the resolve. With this setting the command list is closed
 right after the copy into guest RAM, and the sync point waits only for the
 submission holding the latest copy, which has usually finished by then.
+
+## Finding hitches
+
+Set `frame_hitch_log_ms` (SDK patch 0004, default 0 = off) to log every frame
+slower than that many milliseconds, for example `--frame_hitch_log_ms=40`:
+
+```text
+frame hitch #4858: 68.7 ms, 8 vblanks | cp idle 0.0 ms (waiting for the game), wait_reg_mem 0.0 ms, gpu wait 6.6 ms, cp busy 62.1 ms
+```
+
+`cp idle` is time spent waiting for the game to submit work, `wait_reg_mem` is
+guest-requested stalls, `gpu wait` is the command processor waiting for the
+host GPU, and `cp busy` is the rest: command processing on the CPU. A
+separate log file per run (`--log_file=...`) keeps runs comparable.

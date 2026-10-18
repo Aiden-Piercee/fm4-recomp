@@ -1,0 +1,70 @@
+Subject: perf: log a breakdown of slow frames (frame_hitch_log_ms)
+
+With frame_time_stats on, frame_hitch_log_ms logs every frame slower than the threshold with its CP idle, WAIT_REG_MEM, GPU wait and CP busy time, so hitches can be attributed instead of guessed.
+---
+diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
+index dc582de..b4ddc91 100644
+--- a/include/rex/graphics/command_processor.h
++++ b/include/rex/graphics/command_processor.h
+@@ -333,6 +333,11 @@ class CommandProcessor {
+   uint64_t frame_stats_idle_us_ = 0;
+   uint64_t frame_stats_wait_reg_us_ = 0;
+   uint64_t frame_stats_gpu_wait_us_ = 0;
++  // Window totals at the previous swap, for per-frame hitch breakdowns.
++  uint64_t frame_stats_snap_idle_us_ = 0;
++  uint64_t frame_stats_snap_wait_reg_us_ = 0;
++  uint64_t frame_stats_snap_gpu_wait_us_ = 0;
++  uint64_t frame_stats_frame_index_ = 0;
+ 
+  private:
+   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index 5165937..a6e1af8 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -44,6 +44,9 @@ REXCVAR_DEFINE_BOOL(frame_time_stats, true, "GPU",
+                     "every frame_time_stats_window swaps");
+ REXCVAR_DEFINE_INT32(frame_time_stats_window, 300, "GPU",
+                      "Swaps per frame_time_stats log line");
++REXCVAR_DEFINE_INT32(frame_hitch_log_ms, 0, "GPU",
++                     "With frame_time_stats: log a breakdown of every frame slower than this many "
++                     "ms (0 = off)");
+ REXCVAR_DEFINE_INT32(deferred_readback_flush_mask, -1, "GPU",
+                      "Experimental: guest sync points where deferred resolve readback is awaited "
+                      "(bit mask; bit 0 idle, 1 scratch reg, 2 interrupt, 3 swap, 4 WAIT_REG_MEM "
+@@ -1160,12 +1163,27 @@ void CommandProcessor::RecordFrameTimeStats() {
+   }
+   const auto now = std::chrono::steady_clock::now();
+   const uint64_t vblank = graphics_system_ ? graphics_system_->vblank_count() : 0;
++  ++frame_stats_frame_index_;
+   if (frame_stats_last_swap_ != std::chrono::steady_clock::time_point{}) {
+     float ms = std::chrono::duration<float, std::milli>(now - frame_stats_last_swap_).count();
+     frame_stats_ms_.push_back(ms);
+     uint64_t vblanks = vblank - frame_stats_last_vblank_;
+     frame_stats_vblank_hist_[std::min<uint64_t>(vblanks, 3)]++;
++    const int32_t hitch_ms = REXCVAR_GET(frame_hitch_log_ms);
++    if (hitch_ms > 0 && ms > float(hitch_ms)) {
++      const double idle = (frame_stats_idle_us_ - frame_stats_snap_idle_us_) / 1000.0;
++      const double wrm = (frame_stats_wait_reg_us_ - frame_stats_snap_wait_reg_us_) / 1000.0;
++      const double gpu = (frame_stats_gpu_wait_us_ - frame_stats_snap_gpu_wait_us_) / 1000.0;
++      REXGPU_INFO(
++          "frame hitch #{}: {:.1f} ms, {} vblanks | cp idle {:.1f} ms (waiting for the game), "
++          "wait_reg_mem {:.1f} ms, gpu wait {:.1f} ms, cp busy {:.1f} ms",
++          frame_stats_frame_index_, ms, vblanks, idle, wrm, gpu,
++          std::max(0.0, double(ms) - idle - wrm - gpu));
++    }
+   }
++  frame_stats_snap_idle_us_ = frame_stats_idle_us_;
++  frame_stats_snap_wait_reg_us_ = frame_stats_wait_reg_us_;
++  frame_stats_snap_gpu_wait_us_ = frame_stats_gpu_wait_us_;
+   frame_stats_last_swap_ = now;
+   frame_stats_last_vblank_ = vblank;
+ 
+@@ -1205,6 +1223,7 @@ void CommandProcessor::RecordFrameTimeStats() {
+       frame_stats_wait_reg_us_ / 1000.0 / frame_stats_ms_.size(),
+       frame_stats_gpu_wait_us_ / 1000.0 / frame_stats_ms_.size(), worst);
+   frame_stats_idle_us_ = frame_stats_wait_reg_us_ = frame_stats_gpu_wait_us_ = 0;
++  frame_stats_snap_idle_us_ = frame_stats_snap_wait_reg_us_ = frame_stats_snap_gpu_wait_us_ = 0;
+   frame_stats_ms_.clear();
+   std::fill(std::begin(frame_stats_vblank_hist_), std::end(frame_stats_vblank_hist_), 0u);
+ }
