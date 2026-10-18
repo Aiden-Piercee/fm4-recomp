@@ -12,6 +12,7 @@ THIRD_PARTY_NOTICES.md
 assets/fm4-recompiled-hero.png
 docs/CONTRIBUTIONS.md
 docs/LEGAL.md
+docs/PERFORMANCE.md
 docs/RELEASE_NOTES.md
 docs/RELEASING.md
 docs/STATUS.md
@@ -31,6 +32,7 @@ fm4/xmediafacade_functions.toml
 project-manifest.toml
 release/release-policy.json
 release/source-files.txt
+sdk-patches/0001-d3d12-deferred-readback-sync.patch
 sdk-patches/README.md
 tools/Build-Local.ps1
 tools/New-SourceRelease.ps1

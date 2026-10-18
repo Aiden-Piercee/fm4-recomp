@@ -1,0 +1,207 @@
+Subject: perf(d3d12): defer resolve readback sync to guest-visible sync points
+
+With readback_resolve = "full" and d3d12_readback_resolve_host_copy, the command
+processor waited for the GPU after every resolve. d3d12_readback_resolve_deferred_sync
+(default off) records the copy into guest RAM and waits once, at the next point where
+the guest can observe command-stream progress (fences, interrupts, memory and
+scratch-register writebacks, swaps and stalls), so the guest never sees a signal
+before the resolved data is in guest RAM.
+---
+diff --git a/include/rex/graphics/command_processor.h b/include/rex/graphics/command_processor.h
+index 12efe6d..e80a69c 100644
+--- a/include/rex/graphics/command_processor.h
++++ b/include/rex/graphics/command_processor.h
+@@ -184,6 +184,12 @@ class CommandProcessor {
+   virtual void OnGammaRampPWLValueWritten() {}
+ 
+   virtual void MakeCoherent();
++  // Called on the command processor thread wherever the guest can observe
++  // command-stream progress: fences, interrupts, memory and scratch-register
++  // writebacks, swaps and command-processor stalls. A backend that defers
++  // resolve-readback synchronization must complete pending readbacks here so
++  // the guest never sees a signal before the resolved data is in guest RAM.
++  virtual void FlushDeferredReadbackSync() {}
+   virtual void PrepareForWait();
+   virtual void ReturnFromWait();
+ 
+diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
+index 7384494..a03d5fa 100644
+--- a/include/rex/graphics/d3d12/command_processor.h
++++ b/include/rex/graphics/d3d12/command_processor.h
+@@ -218,6 +218,8 @@ class D3D12CommandProcessor : public CommandProcessor {
+ 
+   void OnPrimaryBufferEnd() override;
+ 
++  void FlushDeferredReadbackSync() override;
++
+   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
+                      const uint32_t* host_address, uint32_t dword_count) override;
+ 
+@@ -397,7 +399,12 @@ class D3D12CommandProcessor : public CommandProcessor {
+   uint32_t rb_stat_requests_ = 0;
+   uint32_t rb_stat_skips_ = 0;
+   uint32_t rb_stat_sync_waits_ = 0;
++  uint32_t rb_stat_deferred_ = 0;
+   uint64_t rb_stat_wait_us_ = 0;
++  // A full-mode host-copy resolve readback has been recorded but not awaited
++  // (d3d12_readback_resolve_deferred_sync). Completed by
++  // FlushDeferredReadbackSync at the next guest-observable sync point.
++  bool readback_host_copy_sync_pending_ = false;
+   std::unordered_map<uint64_t, uint32_t> rb_stat_key_counts_;
+   static constexpr uint32_t kReadbackBufferSizeIncrement = 16 * 1024 * 1024;
+   static constexpr size_t kMaxReadbackBuffers = 256;
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index 1ab79a0..537e6be 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -308,6 +308,7 @@ void CommandProcessor::WorkerThreadMain() {
+       // We've run out of commands to execute.
+       // We spin here waiting for new ones, as the overhead of waiting on our
+       // event is too high.
++      FlushDeferredReadbackSync();
+       PrepareForWait();
+       uint32_t loop_count = 0;
+       do {
+@@ -445,6 +446,12 @@ void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
+     return;
+   }
+ 
++  // Scratch registers are guest-visible fences (via MMIO and writeback), so any
++  // deferred resolve readback must land before the new value can be seen.
++  if (index >= XE_GPU_REG_SCRATCH_REG0 && index <= XE_GPU_REG_SCRATCH_REG7) {
++    FlushDeferredReadbackSync();
++  }
++
+   // Volatile for the WAIT_REG_MEM loop.
+   const_cast<volatile uint32_t&>(regs.values[index]) = value;
+   if (!regs.GetRegisterInfo(index)) {
+@@ -1072,6 +1079,7 @@ bool CommandProcessor::ExecutePacketType3_INTERRUPT(memory::RingBuffer* reader,
+ 
+   // generate interrupt from the command stream
+   uint32_t cpu_mask = reader->ReadAndSwap<uint32_t>();
++  FlushDeferredReadbackSync();
+   for (int n = 0; n < 6; n++) {
+     if (cpu_mask & (1 << n)) {
+       if (graphics_system_) {
+@@ -1114,6 +1122,7 @@ bool CommandProcessor::ExecutePacketType3_XE_SWAP(memory::RingBuffer* reader, ui
+   uint32_t frontbuffer_height = reader->ReadAndSwap<uint32_t>();
+   reader->AdvanceRead((count - 4) * sizeof(uint32_t));
+ 
++  FlushDeferredReadbackSync();
+   IssueSwap(frontbuffer_ptr, frontbuffer_width, frontbuffer_height);
+ 
+   ++counter_;
+@@ -1187,6 +1196,9 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
+         break;
+     }
+     if (!matched) {
++      // The command processor is stalled on the guest; don't keep the guest
++      // waiting on resolved data in return.
++      FlushDeferredReadbackSync();
+       // Wait.
+       if (wait >= 0x100) {
+         PrepareForWait();
+@@ -1251,6 +1263,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+   auto endianness = static_cast<xenos::Endian>(mem_addr & 0x3);
+   mem_addr &= ~0x3;
+   reg_val = GpuSwap(reg_val, endianness);
++  FlushDeferredReadbackSync();
+   memory::store(memory_->TranslatePhysical(mem_addr), reg_val);
+   trace_writer_.WriteMemoryWrite(CpuToGpu(mem_addr), 4);
+ 
+@@ -1260,6 +1273,7 @@ bool CommandProcessor::ExecutePacketType3_REG_TO_MEM(memory::RingBuffer* reader,
+ bool CommandProcessor::ExecutePacketType3_MEM_WRITE(memory::RingBuffer* reader, uint32_t packet,
+                                                     uint32_t count) {
+   uint32_t write_addr = reader->ReadAndSwap<uint32_t>();
++  FlushDeferredReadbackSync();
+   for (uint32_t i = 0; i < count - 1; i++) {
+     uint32_t write_data = reader->ReadAndSwap<uint32_t>();
+ 
+@@ -1324,6 +1338,7 @@ bool CommandProcessor::ExecutePacketType3_COND_WRITE(memory::RingBuffer* reader,
+   }
+   if (matched) {
+     // Write.
++    FlushDeferredReadbackSync();
+     if (wait_info & 0x100) {
+       // Memory.
+       auto endianness = static_cast<xenos::Endian>(write_reg_addr & 0x3);
+@@ -1375,6 +1390,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_SHD(memory::RingBuffer* re
+   auto endianness = static_cast<xenos::Endian>(address & 0x3);
+   address &= ~0x3;
+   data_value = GpuSwap(data_value, endianness);
++  FlushDeferredReadbackSync();
+   memory::store(memory_->TranslatePhysical(address), data_value);
+   trace_writer_.WriteMemoryWrite(CpuToGpu(address), 4);
+   return true;
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index e296f7d..b4bc16b 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -43,6 +43,12 @@ REXCVAR_DEFINE_BOOL(d3d12_readback_resolve, false, "GPU/D3D12",
+                     "Read render-to-texture results on the CPU")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(d3d12_readback_resolve_deferred_sync, false, "GPU/D3D12",
++                    "With full resolve readback through the guest-RAM host copy, wait for the "
++                    "GPU once at the next guest-visible sync point (fence, interrupt, memory "
++                    "writeback, swap or stall) instead of after every resolve")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
+                     "Submit command list when PM4 primary buffer ends")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+@@ -2293,6 +2299,22 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
+   EndSubmission(true);
+ }
+ 
++void D3D12CommandProcessor::FlushDeferredReadbackSync() {
++  if (!readback_host_copy_sync_pending_) {
++    return;
++  }
++  readback_host_copy_sync_pending_ = false;
++  const auto wait_begin = std::chrono::steady_clock::now();
++  const bool wait_ok = AwaitAllQueueOperationsCompletion();
++  ++rb_stat_sync_waits_;
++  rb_stat_wait_us_ += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
++                                   std::chrono::steady_clock::now() - wait_begin)
++                                   .count());
++  if (!wait_ok) {
++    REXGPU_WARN("Deferred resolve host copy queue wait failed");
++  }
++}
++
+ void D3D12CommandProcessor::OnPrimaryBufferEnd() {
+   if (REXCVAR_GET(d3d12_submit_on_primary_buffer_end) && submission_open_ &&
+       CanEndSubmissionImmediately()) {
+@@ -3008,11 +3030,11 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+         top += fmt::format(" [{:08X}+{:X}]x{}", uint32_t(key >> 32), uint32_t(key), count);
+       }
+       REXGPU_INFO(
+-          "readback stats/300f: {} requests, {} keys, {} auto-skips, {} sync waits, {} ms "
+-          "waiting; top:{}",
+-          rb_stat_requests_, rb_stat_key_counts_.size(), rb_stat_skips_, rb_stat_sync_waits_,
+-          rb_stat_wait_us_ / 1000, top);
+-      rb_stat_requests_ = rb_stat_skips_ = rb_stat_sync_waits_ = 0;
++          "readback stats/300f: {} requests, {} keys, {} auto-skips, {} deferred, {} sync waits, "
++          "{} ms waiting; top:{}",
++          rb_stat_requests_, rb_stat_key_counts_.size(), rb_stat_skips_, rb_stat_deferred_,
++          rb_stat_sync_waits_, rb_stat_wait_us_ / 1000, top);
++      rb_stat_requests_ = rb_stat_skips_ = rb_stat_sync_waits_ = rb_stat_deferred_ = 0;
+       rb_stat_wait_us_ = 0;
+       rb_stat_key_counts_.clear();
+       rb_stat_window_start_frame_ = frame_current_;
+@@ -3208,6 +3230,14 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+   }
+ 
+   if (use_resolve_host_copy) {
++    if (REXCVAR_GET(d3d12_readback_resolve_deferred_sync)) {
++      // The copy into guest RAM is recorded; the guest can only rely on it
++      // after a later fence, interrupt or other sync point, which will await
++      // all copies recorded up to then in a single wait.
++      readback_host_copy_sync_pending_ = true;
++      ++rb_stat_deferred_;
++      return true;
++    }
+     const auto wait_begin = std::chrono::steady_clock::now();
+     const bool wait_ok = AwaitAllQueueOperationsCompletion();
+     ++rb_stat_sync_waits_;

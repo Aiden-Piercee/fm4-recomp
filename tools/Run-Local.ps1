@@ -2,6 +2,9 @@
 param(
     [Parameter(Mandatory)][string]$GameDataRoot,
     [string]$Disc2ContentRoot,
+    # Experimental: wait for resolve readback once per guest-visible sync point
+    # instead of after every resolve (sdk-patches/0001).
+    [switch]$DeferredReadbackSync,
     # Extra runtime settings for this run only, e.g. "--resolution_scale=2".
     # They are written into the deployed fm4.toml because the runtime applies the
     # config file after the command line, so a command-line value alone would be
@@ -23,6 +26,9 @@ $deployedConfig = Join-Path $buildRoot "fm4.toml"
 Copy-Item -LiteralPath (Join-Path $root ".local/work/fm4/fm4_runtime.toml") -Destination $deployedConfig -Force
 
 $cvarOverrides = [ordered]@{}
+if ($DeferredReadbackSync) {
+    $cvarOverrides["d3d12_readback_resolve_deferred_sync"] = "true"
+}
 # pwsh -File passes "a","b" as one string "a,b", so split on commas that start a new --option.
 $splitRuntimeArgs = @(@($RuntimeArgs) | Where-Object { $_ } | ForEach-Object { $_ -split ',(?=--)' } | ForEach-Object { $_.Trim() })
 foreach ($runtimeArg in $splitRuntimeArgs) {

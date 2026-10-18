@@ -14,3 +14,7 @@ To rebuild only the patched GPU plugin into an existing local build:
 ```powershell
 pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOnly
 ```
+
+## Series
+
+- `0001-d3d12-deferred-readback-sync.patch`: `d3d12_readback_resolve_deferred_sync` waits for resolve readback once per guest-visible sync point instead of after every resolve.

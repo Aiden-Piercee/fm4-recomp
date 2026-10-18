@@ -12,6 +12,10 @@ resolution_scale = 1
 # and trackside assets. Do not add a vblank override to the correctness preset.
 readback_resolve = "full"
 d3d12_readback_resolve_host_copy = true
+# Experimental (sdk-patches/0001): wait for the host copy once at the next
+# guest-visible sync point instead of after every resolve. Off in the
+# correctness preset; enable per run with Run-Local.ps1 -DeferredReadbackSync.
+d3d12_readback_resolve_deferred_sync = false
 render_target_path_d3d12 = "rov"
 # The host has no D3D12 debug layer installed; command-prefix diagnostics
 # isolated the failure without it.

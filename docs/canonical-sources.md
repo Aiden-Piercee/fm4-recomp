@@ -6,6 +6,7 @@
 | Player package setup | [Player instructions](PLAYING.md) |
 | Tested behavior and limitations | [Current status](STATUS.md) |
 | Build constraints | [Build notes](../BUILD-NOTES.md) |
+| Opt-in performance settings and measurements | [Performance options](PERFORMANCE.md) |
 | Runtime configuration | [`fm4/fm4_runtime.toml`](../fm4/fm4_runtime.toml) |
 | Recompilation inputs and modules | [`fm4/fm4_manifest.toml`](../fm4/fm4_manifest.toml) |
 | Reusable research and upstream work | [Contributions](CONTRIBUTIONS.md) |
