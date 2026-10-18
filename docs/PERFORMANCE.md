@@ -177,3 +177,12 @@ Menus, Autovista and the pre-race grid run at 30 FPS by the game's own pacing.
 Loading screens still show freezes of about 1 second in resolve work, and the
 first seconds of a race still have a short burst of slow frames. These results
 come from one machine and one track and do not replace the validated profile.
+
+## Experimental 4K profile
+
+`Launch FM4 (Performance 4K).bat` is the 1440p profile at
+`resolution_scale = 3` (3840x2160). On the RX 7900 XTX test machine a race
+held 60 FPS: frames averaged 16.7 ms with a 99th percentile of 20.7 ms, 4 race
+frames went over 34 ms, and the game still waited about 12 ms of each frame
+for the next vblank, so there was headroom left. This was one shorter race,
+and it needs a GPU in that class.
