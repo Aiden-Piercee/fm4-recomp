@@ -139,6 +139,18 @@ the copies move a fraction of the data. Edges are no longer anti-aliased;
 On a Ryzen 5000U laptop (Vega iGPU) at 1x it cut GPU time per frame from
 36-44 ms to about 27 ms (about 31 FPS), but the jagged edges are very visible.
 
+## Host MSAA sample limit
+
+```toml
+native_executor_max_msaa_samples = 2
+```
+
+Native path only. A middle ground between full MSAA and single-sample surfaces:
+guest 4x surfaces are stored as host 2x (each guest sample uses the nearer 2x
+sample position), guest 2x stays 2x. `1` behaves like
+`native_executor_single_sample_msaa`, and `0` (the default) keeps the guest's
+sample count. Not yet measured on an integrated GPU.
+
 ## Experimental 1440p profile
 
 `Launch FM4 (Performance 1440p).bat` combines the settings above for 2x

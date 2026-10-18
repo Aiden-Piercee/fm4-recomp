@@ -43,6 +43,7 @@ sdk-patches/0006-hitch-texture-breakdown.patch
 sdk-patches/0007-d3d12-placed-texture-heaps.patch
 sdk-patches/0008-precise-vblank-timer.patch
 sdk-patches/0009-native-executor-single-sample-msaa.patch
+sdk-patches/0010-native-executor-max-msaa-samples.patch
 sdk-patches/README.md
 tools/Build-Local.ps1
 tools/Build-NativeShaders.ps1

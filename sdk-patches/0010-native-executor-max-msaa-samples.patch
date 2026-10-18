@@ -1,0 +1,281 @@
+Subject: perf(d3d12): optional 2x host MSAA for guest 4x surfaces in the native executor
+
+native_executor_max_msaa_samples (default 0 = as the guest) limits the host
+samples of guest MSAA surfaces: 1 renders them single-sampled (as
+native_executor_single_sample_msaa), 2 stores guest 4x surfaces as host 2x. Host
+sample mode 4 maps each guest 4x sample to the nearer of the standard 2x
+positions; the layout's host sample mode field grows to bits 27:29.
+
+The change is in the native EDRAM HLSL, which the builder compiles at build
+time, and in the runtime-compiled resolve and stencil-reference sources.
+---
+diff --git a/include/rex/graphics/d3d12/native_executor.h b/include/rex/graphics/d3d12/native_executor.h
+index ad4550a..513129d 100644
+--- a/include/rex/graphics/d3d12/native_executor.h
++++ b/include/rex/graphics/d3d12/native_executor.h
+@@ -94,8 +94,9 @@ class NativeExecutor {
+   ~NativeExecutor();
+ 
+   bool Initialize(const NativeExecutorConfig& config);
+-  // native_executor_single_sample_msaa: guest MSAA surfaces have one host sample.
+-  bool single_sample_msaa() const { return single_sample_msaa_; }
++  // native_executor_max_msaa_samples (or _single_sample_msaa): the most host
++  // samples a guest MSAA surface gets, 0 for as many as the guest.
++  uint32_t max_msaa_samples() const { return max_msaa_samples_; }
+   void Shutdown();
+ 
+   // Before the targets are bound for a draw: derives the surfaces the draw
+@@ -224,7 +225,8 @@ class NativeExecutor {
+                      uint32_t column_end, uint32_t row_end);
+   ID3D12PipelineState* GetTransferPipeline(const TransferPipelineKey& key);
+   // Host sample mode of a surface's layout constant (see native_edram.hlsli):
+-  // 0 as the guest, 1 native 2x, 2 2x stored as 4x, 3 MSAA over one sample.
++  // 0 as the guest, 1 native 2x, 2 2x stored as 4x, 3 MSAA over one sample,
++  // 4 4x stored as 2x.
+   static uint32_t HostSampleMode(const Surface& surface);
+   uint32_t LayoutConstant(const Surface& surface) const;
+   // Splits the resolve's pixel rectangle into rectangles per owning surface.
+@@ -235,7 +237,7 @@ class NativeExecutor {
+   // (SV_StencilRef), native_executor_stencil_ref_transfers.
+   static constexpr uint32_t kTransferDestDepthStencilRef = 32;
+   bool stencil_ref_transfers_ = false;
+-  bool single_sample_msaa_ = false;
++  uint32_t max_msaa_samples_ = 0;
+   Microsoft::WRL::ComPtr<ID3DBlob> stencil_ref_transfer_ps_[2];  // [dest msaa]
+   // Runtime HLSL compilation with D3DCompiler_47.dll (null on failure).
+   Microsoft::WRL::ComPtr<ID3DBlob> CompileRuntimeShader(const char* source, size_t source_size,
+diff --git a/include/rex/graphics/d3d12/pipeline_cache.h b/include/rex/graphics/d3d12/pipeline_cache.h
+index 1877884..a7e9063 100644
+--- a/include/rex/graphics/d3d12/pipeline_cache.h
++++ b/include/rex/graphics/d3d12/pipeline_cache.h
+@@ -97,12 +97,12 @@ class PipelineCache {
+     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
+   }
+ 
+-  // Create host pipelines with one sample whatever the guest MSAA mode (for
+-  // render target paths that keep MSAA surfaces single-sampled).
+-  void SetForceSingleSample(bool force) { force_single_sample_ = force; }
++  // Limit host pipelines' sample count for guest MSAA (for render target paths
++  // that store MSAA surfaces with fewer samples): 0 = as the guest, 1 or 2.
++  void SetMaxHostMsaaSamples(uint32_t samples) { max_host_msaa_samples_ = samples; }
+ 
+  private:
+-  bool force_single_sample_ = false;
++  uint32_t max_host_msaa_samples_ = 0;
+   REXPACKEDSTRUCT(ShaderStoredHeader, {
+     uint64_t ucode_data_hash;
+ 
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 12a5895..cf554bb 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -1266,8 +1266,8 @@ bool D3D12CommandProcessor::SetupContext() {
+     REXGPU_ERROR("Failed to initialize the graphics pipeline cache");
+     return false;
+   }
+-  if (native_executor_ && native_executor_->single_sample_msaa()) {
+-    pipeline_cache_->SetForceSingleSample(true);
++  if (native_executor_) {
++    pipeline_cache_->SetMaxHostMsaaSamples(native_executor_->max_msaa_samples());
+   }
+ 
+   D3D12_HEAP_FLAGS heap_flag_create_not_zeroed = provider.GetHeapFlagCreateNotZeroed();
+diff --git a/src/graphics/d3d12/native_executor.cpp b/src/graphics/d3d12/native_executor.cpp
+index 1db3ebe..6bfbe80 100644
+--- a/src/graphics/d3d12/native_executor.cpp
++++ b/src/graphics/d3d12/native_executor.cpp
+@@ -58,6 +58,13 @@ REXCVAR_DEFINE_BOOL(native_executor_single_sample_msaa, false, "GPU/D3D12",
+                     "resolve work on weak GPUs at the cost of anti-aliasing")
+     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+ 
++REXCVAR_DEFINE_INT32(native_executor_max_msaa_samples, 0, "GPU/D3D12",
++                     "Native executor: host samples for guest 2x/4x MSAA surfaces at most (0 = as "
++                     "the guest, 1 = single-sampled, 2 = 4x stored as 2x). Fewer samples cut "
++                     "transfer and resolve bandwidth on weak GPUs; 2 keeps some anti-aliasing")
++    .range(0, 2)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ REXCVAR_DEFINE_BOOL(native_executor_gpu_profile, false, "GPU/D3D12",
+                     "Native executor: log GPU milliseconds per frame of all submissions and of "
+                     "the executor's transfers, resolves and clears, and the resolve read-back "
+@@ -345,9 +352,17 @@ bool NativeExecutor::Initialize(const NativeExecutorConfig& config) {
+     return false;
+   }
+   if (!config_.trace_writer) return false;
+-  single_sample_msaa_ = REXCVAR_GET(native_executor_single_sample_msaa);
+-  if (single_sample_msaa_) {
+-    REXGPU_INFO("Native executor: MSAA surfaces use a single host sample");
++  max_msaa_samples_ = uint32_t(REXCVAR_GET(native_executor_max_msaa_samples));
++  if (REXCVAR_GET(native_executor_single_sample_msaa)) {
++    max_msaa_samples_ = 1;
++  }
++  if (max_msaa_samples_ == 2 && !config_.msaa_2x_supported) {
++    REXGPU_WARN("Native executor: host 2x MSAA unsupported; MSAA surfaces use one sample");
++    max_msaa_samples_ = 1;
++  }
++  if (max_msaa_samples_) {
++    REXGPU_INFO("Native executor: MSAA surfaces use at most {} host sample(s)",
++                max_msaa_samples_);
+   }
+   if (REXCVAR_GET(native_executor_stencil_ref_transfers)) {
+     if (provider.IsPSSpecifiedStencilReferenceSupported()) {
+@@ -520,10 +535,12 @@ NativeExecutor::Surface* NativeExecutor::GetOrCreateSurface(const SurfaceKey& ke
+   surface.key = key;
+   surface.width = key.pitch_tiles * (xenos::kEdramTileWidthSamples >> msaa_x_log2);
+   surface.height = SurfaceHeight(key.pitch_tiles, key.msaa);
+-  surface.samples = single_sample_msaa_ ? 1u
+-                    : key.msaa == uint32_t(xenos::MsaaSamples::k2X) && !config_.msaa_2x_supported
++  surface.samples = key.msaa == uint32_t(xenos::MsaaSamples::k2X) && !config_.msaa_2x_supported
+                         ? 4
+                         : 1u << key.msaa;
++  if (max_msaa_samples_ && surface.samples > max_msaa_samples_) {
++    surface.samples = max_msaa_samples_;
++  }
+   D3D12_RESOURCE_DESC desc = {};
+   desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+   desc.Width = surface.width * scale_;
+@@ -619,6 +636,9 @@ uint32_t NativeExecutor::HostSampleMode(const Surface& surface) {
+   if (key.msaa != uint32_t(xenos::MsaaSamples::k1X) && surface.samples == 1) {
+     return 3u;  // Guest MSAA layout over a single host sample.
+   }
++  if (key.msaa == uint32_t(xenos::MsaaSamples::k4X) && surface.samples == 2) {
++    return 4u;  // 4x stored as 2x.
++  }
+   if (key.msaa == uint32_t(xenos::MsaaSamples::k2X)) {
+     return surface.samples == 4 ? 2u : 1u;
+   }
+@@ -630,7 +650,7 @@ uint32_t NativeExecutor::LayoutConstant(const Surface& surface) const {
+   const uint32_t host_sample_mode = HostSampleMode(surface);
+   return PackLayout(key.base_tiles, key.pitch_tiles, key.msaa, key.Is64bpp(), key.is_depth,
+                     key.format) |
+-         (host_sample_mode << 27);
++         (host_sample_mode << 27);  // 27:29
+ }
+ 
+ ID3D12PipelineState* NativeExecutor::GetTransferPipeline(const TransferPipelineKey& key) {
+diff --git a/src/graphics/d3d12/native_resolve_ext_source.h b/src/graphics/d3d12/native_resolve_ext_source.h
+index e2a77c2..485fe28 100644
+--- a/src/graphics/d3d12/native_resolve_ext_source.h
++++ b/src/graphics/d3d12/native_resolve_ext_source.h
+@@ -180,7 +180,7 @@ uint LayoutMsaa(uint layout) { return (layout >> 19u) & 3u; }
+ uint LayoutIs64bpp(uint layout) { return (layout >> 21u) & 1u; }
+ uint LayoutIsDepth(uint layout) { return (layout >> 22u) & 1u; }
+ uint LayoutFormat(uint layout) { return (layout >> 23u) & 0xFu; }
+-uint LayoutHostSampleMode(uint layout) { return (layout >> 27u) & 3u; }
++uint LayoutHostSampleMode(uint layout) { return (layout >> 27u) & 7u; }
+ 
+ // xenos::Float32To20e4.
+ uint Float32To20e4(float f32, bool round_to_nearest_even) {
+@@ -365,6 +365,10 @@ uint HostSample(uint guest_sample, uint msaa, uint host_mode) {
+   uint host_sample = guest_sample;
+   if (host_mode == 3u) {
+     host_sample = 0u;  // Single-sampled MSAA surface.
++  } else if (msaa == 2u && host_mode == 4u) {
++    // 4x stored as 2x: each guest sample goes to the nearer of the host's
++    // standard 2x positions (host 0 bottom-right, host 1 top-left).
++    host_sample = (guest_sample == 0u || guest_sample == 2u) ? 1u : 0u;
+   } else if (msaa == 1u && host_mode == 1u) {
+     host_sample = guest_sample ^ 1u;  // Native 2x: host 1 is the top sample.
+   } else if (msaa == 1u && host_mode == 2u) {
+@@ -378,6 +382,8 @@ uint GuestSample(uint host_sample, uint msaa, uint host_mode) {
+   uint guest_sample = host_sample;
+   if (host_mode == 3u) {
+     guest_sample = 0u;
++  } else if (msaa == 2u && host_mode == 4u) {
++    guest_sample = host_sample != 0u ? 0u : 3u;
+   } else if (msaa == 1u && host_mode == 1u) {
+     guest_sample = host_sample ^ 1u;
+   } else if (msaa == 1u && host_mode == 2u) {
+diff --git a/src/graphics/d3d12/native_transfer_sref_source.h b/src/graphics/d3d12/native_transfer_sref_source.h
+index 98845b0..84d7fa8 100644
+--- a/src/graphics/d3d12/native_transfer_sref_source.h
++++ b/src/graphics/d3d12/native_transfer_sref_source.h
+@@ -146,7 +146,7 @@ uint LayoutMsaa(uint layout) { return (layout >> 19u) & 3u; }
+ uint LayoutIs64bpp(uint layout) { return (layout >> 21u) & 1u; }
+ uint LayoutIsDepth(uint layout) { return (layout >> 22u) & 1u; }
+ uint LayoutFormat(uint layout) { return (layout >> 23u) & 0xFu; }
+-uint LayoutHostSampleMode(uint layout) { return (layout >> 27u) & 3u; }
++uint LayoutHostSampleMode(uint layout) { return (layout >> 27u) & 7u; }
+ 
+ // xenos::Float32To20e4.
+ uint Float32To20e4(float f32, bool round_to_nearest_even) {
+@@ -332,6 +332,10 @@ uint HostSample(uint guest_sample, uint msaa, uint host_mode) {
+   uint host_sample = guest_sample;
+   if (host_mode == 3u) {
+     host_sample = 0u;  // Single-sampled MSAA surface.
++  } else if (msaa == 2u && host_mode == 4u) {
++    // 4x stored as 2x: each guest sample goes to the nearer of the host's
++    // standard 2x positions (host 0 bottom-right, host 1 top-left).
++    host_sample = (guest_sample == 0u || guest_sample == 2u) ? 1u : 0u;
+   } else if (msaa == 1u && host_mode == 1u) {
+     host_sample = guest_sample ^ 1u;  // Native 2x: host 1 is the top sample.
+   } else if (msaa == 1u && host_mode == 2u) {
+@@ -345,6 +349,8 @@ uint GuestSample(uint host_sample, uint msaa, uint host_mode) {
+   uint guest_sample = host_sample;
+   if (host_mode == 3u) {
+     guest_sample = 0u;
++  } else if (msaa == 2u && host_mode == 4u) {
++    guest_sample = host_sample != 0u ? 0u : 3u;
+   } else if (msaa == 1u && host_mode == 1u) {
+     guest_sample = host_sample ^ 1u;
+   } else if (msaa == 1u && host_mode == 2u) {
+diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
+index 7429e23..6b5d6b3 100644
+--- a/src/graphics/d3d12/pipeline_cache.cpp
++++ b/src/graphics/d3d12/pipeline_cache.cpp
+@@ -1580,9 +1580,12 @@ bool PipelineCache::GetCurrentStateDescription(
+       host_msaa_samples = xenos::MsaaSamples::k4X;
+     }
+   } else {
+-    if (force_single_sample_) {
++    if (max_host_msaa_samples_ == 1) {
+       // The native executor keeps guest MSAA surfaces single-sampled.
+       host_msaa_samples = xenos::MsaaSamples::k1X;
++    } else if (max_host_msaa_samples_ == 2 && host_msaa_samples == xenos::MsaaSamples::k4X) {
++      // The native executor stores guest 4x MSAA surfaces as 2x.
++      host_msaa_samples = xenos::MsaaSamples::k2X;
+     }
+     if (!(bound_depth_and_color_render_target_bits & ~uint32_t(1)) &&
+         !depth_stencil_bound_and_used) {
+diff --git a/src/graphics/shaders/native_executor/native_edram.hlsli b/src/graphics/shaders/native_executor/native_edram.hlsli
+index 4af7c2d..a5d782b 100644
+--- a/src/graphics/shaders/native_executor/native_edram.hlsli
++++ b/src/graphics/shaders/native_executor/native_edram.hlsli
+@@ -95,14 +95,15 @@ void SetScaledPixel(inout uint2 pixel, uint scale) {
+ 
+ // Layouts: base_tiles 0:10, pitch_tiles (32bpp) 11:18, msaa 19:20,
+ // is_64bpp 21, is_depth 22, guest format 23:26 (color or depth format),
+-// host sample mode 27:28 (0: as guest, 1: native 2x, 2: 2x stored as 4x).
++// host sample mode 27:29 (0: as guest, 1: native 2x, 2: 2x stored as 4x,
++// 3: MSAA over one host sample, 4: 4x stored as 2x).
+ uint LayoutBase(uint layout) { return layout & 0x7FFu; }
+ uint LayoutPitch(uint layout) { return (layout >> 11u) & 0xFFu; }
+ uint LayoutMsaa(uint layout) { return (layout >> 19u) & 3u; }
+ uint LayoutIs64bpp(uint layout) { return (layout >> 21u) & 1u; }
+ uint LayoutIsDepth(uint layout) { return (layout >> 22u) & 1u; }
+ uint LayoutFormat(uint layout) { return (layout >> 23u) & 0xFu; }
+-uint LayoutHostSampleMode(uint layout) { return (layout >> 27u) & 3u; }
++uint LayoutHostSampleMode(uint layout) { return (layout >> 27u) & 7u; }
+ 
+ // xenos::Float32To20e4.
+ uint Float32To20e4(float f32, bool round_to_nearest_even) {
+@@ -285,6 +286,10 @@ uint HostSample(uint guest_sample, uint msaa, uint host_mode) {
+   uint host_sample = guest_sample;
+   if (host_mode == 3u) {
+     host_sample = 0u;  // Single-sampled MSAA surface.
++  } else if (msaa == 2u && host_mode == 4u) {
++    // 4x stored as 2x: each guest sample goes to the nearer of the host's
++    // standard 2x positions (host 0 bottom-right, host 1 top-left).
++    host_sample = (guest_sample == 0u || guest_sample == 2u) ? 1u : 0u;
+   } else if (msaa == 1u && host_mode == 1u) {
+     host_sample = guest_sample ^ 1u;  // Native 2x: host 1 is the top sample.
+   } else if (msaa == 1u && host_mode == 2u) {
+@@ -298,6 +303,8 @@ uint GuestSample(uint host_sample, uint msaa, uint host_mode) {
+   uint guest_sample = host_sample;
+   if (host_mode == 3u) {
+     guest_sample = 0u;
++  } else if (msaa == 2u && host_mode == 4u) {
++    guest_sample = host_sample != 0u ? 0u : 3u;
+   } else if (msaa == 1u && host_mode == 1u) {
+     guest_sample = host_sample ^ 1u;
+   } else if (msaa == 1u && host_mode == 2u) {
