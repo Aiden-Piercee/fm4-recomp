@@ -4,6 +4,7 @@
 .gitignore
 BUILD-NOTES.md
 LICENSE
+Launch FM4 (Performance 1440p).bat
 Launch FM4 Disc 2 Install.bat
 Launch FM4.bat
 README.md

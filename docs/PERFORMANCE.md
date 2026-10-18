@@ -123,3 +123,37 @@ jitter. With this setting the thread sleeps only while more than about 2 ms
 remain, then yields until the vblank is due. At a locked 60 FPS this halved the
 frames that arrived late (over 17.5 ms), at the cost of a little CPU time on
 the vblank thread.
+
+## Experimental 1440p profile
+
+`Launch FM4 (Performance 1440p).bat` combines the settings above for 2x
+internal resolution (2560x1440):
+
+```toml
+render_target_path_d3d12 = "native"
+resolution_scale = 2
+d3d12_readback_resolve_deferred_sync = true
+d3d12_readback_resolve_early_submit = true
+native_executor_stencil_ref_transfers = true
+texture_cache_memory_limit_soft = 4096
+texture_cache_memory_limit_hard = 8192
+texture_cache_memory_limit_soft_lifetime = 600
+d3d12_texture_placed_heaps = true
+d3d12_texture_heap_prealloc_mb = 1024
+readback_resolve = "fast"
+vblank_precise_timer = true
+```
+
+- `readback_resolve = "fast"` is the experimental part. Full readback made the
+  command processor wait about 7 ms per frame for the GPU at 2x, so about a
+  quarter of race frames missed their 60 FPS slot. `fast` still copies every
+  resolve, but hands the game the previous frame's data instead of waiting.
+  The tested races showed no visual errors; one brief glitch may have appeared
+  on the pre-race screen. `auto` readback, which skips resolves, remains known
+  to cause flicker and texture corruption and is not used.
+- The guest vblank rate stays at the default. A 120 Hz override lifts the
+  30 FPS menu screens, but in races the game then swings between 60 and
+  120 FPS, which reads as stutter, and capping the host present rate on top of
+  it made frame pacing worse.
+- The texture budget assumes a GPU with plenty of memory. Lower the limits on
+  smaller GPUs.
