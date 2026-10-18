@@ -113,3 +113,13 @@ dropped from about 85 ms to 3.7 ms.
   than half a heap still get their own committed resource.
 - `d3d12_texture_heap_prealloc_mb` (default 0): heap memory to create at
   startup, so heap creation does not happen during a race.
+
+## Precise guest vblank timer
+
+`vblank_precise_timer` (SDK patch 0008, default off). The guest vblank thread
+woke from a 1 ms sleep, which on Windows often overshoots by 1-2 ms, so vblanks
+arrived late by a varying amount and the game's frame spacing inherited that
+jitter. With this setting the thread sleeps only while more than about 2 ms
+remain, then yields until the vblank is due. At a locked 60 FPS this halved the
+frames that arrived late (over 17.5 ms), at the cost of a little CPU time on
+the vblank thread.

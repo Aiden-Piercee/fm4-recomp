@@ -24,3 +24,4 @@ pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOn
 - `0005-hitch-cpu-breakdown.patch`: hitch lines also break command-processor CPU time down by work type.
 - `0006-hitch-texture-breakdown.patch`: hitch lines also break texture time into create/upload/load and count evictions.
 - `0007-d3d12-placed-texture-heaps.patch`: `d3d12_texture_placed_heaps` places textures in pre-made heaps instead of creating a committed resource for each one.
+- `0008-precise-vblank-timer.patch`: `vblank_precise_timer` delivers guest vblanks on time instead of up to 1-2 ms late.
