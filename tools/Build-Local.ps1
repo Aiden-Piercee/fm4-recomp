@@ -115,6 +115,13 @@ if ($sdkDirty.Count -ne 0) {
     foreach ($patch in $reversePatches) {
         & $git -C $sdkSource apply --reverse --check $patch 2>$null
         if ($LASTEXITCODE -ne 0) {
+            # A patch the previous build did not apply (another branch's series,
+            # or one added since) still applies forward; skip it. The clean-tree
+            # check below still refuses anything else.
+            & $git -C $sdkSource apply --check $patch 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                continue
+            }
             for ($i = $reversed.Count - 1; $i -ge 0; $i--) {
                 & $git -C $sdkSource apply $reversed[$i] 2>$null
             }
