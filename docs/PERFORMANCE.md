@@ -238,7 +238,12 @@ texture_cache_memory_limit_soft_lifetime = 120
 d3d12_texture_placed_heaps = true
 d3d12_texture_heap_prealloc_mb = 256
 readback_resolve = "fast"
+vblank_precise_timer = true
 ```
+
+On the laptop the guest vblank otherwise arrived about 1.5 ms late, so at a
+30 FPS cap many frames took 34-36 ms and some missed their slot; with the
+precise timer the 99th percentile frame went from 67.6 ms to 35.2 ms at 2x AA.
 
 Integrated GPUs share system memory, so the texture budget is kept small. For a
 steadier frame rate below 60 FPS, `vblank_frequency_override = 30` paces the
