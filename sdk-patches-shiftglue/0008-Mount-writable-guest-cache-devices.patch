@@ -1,0 +1,173 @@
+From d3dc3e2567a9d42a0e8289de4d1c965e4ec71757 Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Fri, 14 Aug 2026 00:21:53 +0300
+Subject: [PATCH 08/11] Mount writable guest cache devices
+
+shiftglue port: shiftglue already mounts cache: from cache_root (which
+ReXApp defaults to <user>/cache). This port adds cache0: and cache1:
+under user_data_root ahead of it, and mounts cache: from user_data_root
+only when cache_root is empty.
+---
+ src/system/runtime.cpp                     | 48 ++++++++++++++++
+ tests/unit/CMakeLists.txt                  |  1 +
+ tests/unit/system/guest_cache_vfs_test.cpp | 66 ++++++++++++++++++++++
+ 3 files changed, 115 insertions(+)
+ create mode 100644 tests/unit/system/guest_cache_vfs_test.cpp
+
+diff --git a/src/system/runtime.cpp b/src/system/runtime.cpp
+index 4174fb9..8b6b38f 100644
+--- a/src/system/runtime.cpp
++++ b/src/system/runtime.cpp
+@@ -9,6 +9,8 @@
+  *              See LICENSE file in the project root for full license text.
+  */
+ 
++#include <string_view>
++
+ #include <rex/chrono/clock.h>
+ #include <rex/cvar.h>
+ #include <rex/filesystem/devices/host_path_device.h>
+@@ -33,6 +35,8 @@ REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
+ REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
+ REXCVAR_DEFINE_STRING(cache_root, "", "Runtime", "Override shader cache path");
+ REXCVAR_DEFINE_STRING(metadata_root, "", "Runtime", "Override metadata path");
++REXCVAR_DEFINE_BOOL(mount_cache, true, "Filesystem",
++                    "Mount writable guest cache:, cache0:, and cache1: devices");
+ 
+ namespace rex {
+ 
+@@ -336,6 +340,50 @@ bool Runtime::SetupVfs() {
+     }
+   }
+ 
++  // Mount the Xbox cache devices as writable host directories. Some titles
++  // use cache: for required temporary state, not optional acceleration data.
++  // Register cache0: and cache1: before cache: to match Xenia and prevent the
++  // shorter cache: prefix from claiming their paths. cache: itself is mounted
++  // below when cache_root is set, so only fall back to user_data_root/cache
++  // without one.
++  if (REXCVAR_GET(mount_cache)) {
++    const auto abs_user_root = std::filesystem::absolute(user_data_root_);
++    const struct {
++      const char* link;
++      const char* mount;
++      const char* directory;
++    } cache_mounts[] = {
++        {"cache0:", "\\CACHE0", "cache0"},
++        {"cache1:", "\\CACHE1", "cache1"},
++        {"cache:", "\\CACHE", "cache"},
++    };
++
++    for (const auto& cache_mount : cache_mounts) {
++      if (!cache_root_.empty() && std::string_view(cache_mount.link) == "cache:") {
++        continue;
++      }
++      const auto host_path = abs_user_root / cache_mount.directory;
++      std::error_code ec;
++      std::filesystem::create_directories(host_path, ec);
++      if (ec) {
++        REXSYS_ERROR("Runtime::SetupVfs: Failed to create {} for {}: {}", host_path.string(),
++                     cache_mount.link, ec.message());
++        return false;
++      }
++
++      auto cache_device = std::make_unique<rex::filesystem::HostPathDevice>(
++          cache_mount.mount, host_path, false /* writable */);
++      if (!cache_device->Initialize() ||
++          !file_system_->RegisterDevice(std::move(cache_device)) ||
++          !file_system_->RegisterSymbolicLink(cache_mount.link, cache_mount.mount)) {
++        REXSYS_ERROR("Runtime::SetupVfs: Failed to mount {} at {}", host_path.string(),
++                     cache_mount.link);
++        return false;
++      }
++      REXSYS_INFO("  Mounted {} at {}", host_path.string(), cache_mount.link);
++    }
++  }
++
+   // Mount cache_root as a writable cache:\ device when provided. Some titles
+   // use this for required transient streams (for example, race replays), and
+   // don't tolerate a device-not-found result even though the data itself is
+diff --git a/tests/unit/CMakeLists.txt b/tests/unit/CMakeLists.txt
+index d968add..f4e4ea7 100644
+--- a/tests/unit/CMakeLists.txt
++++ b/tests/unit/CMakeLists.txt
+@@ -18,6 +18,7 @@ add_executable(unit_tests
+     ppc/stack_test.cpp
+     ppc/vector_math_test.cpp
+     system/guest_path_test.cpp
++    system/guest_cache_vfs_test.cpp
+     system/achievement_manager_test.cpp
+     system/function_dispatcher_test.cpp
+     input/input_assignment_test.cpp
+diff --git a/tests/unit/system/guest_cache_vfs_test.cpp b/tests/unit/system/guest_cache_vfs_test.cpp
+new file mode 100644
+index 0000000..a28badb
+--- /dev/null
++++ b/tests/unit/system/guest_cache_vfs_test.cpp
+@@ -0,0 +1,66 @@
++/**
++ * @file        guest_cache_vfs_test.cpp
++ * @brief       Unit tests for writable Xbox cache device mappings
++ *
++ * @copyright   Copyright (c) 2026 Tom Clay
++ * @license     BSD 3-Clause License
++ */
++
++#include <chrono>
++#include <filesystem>
++#include <memory>
++#include <string>
++
++#include <catch2/catch_test_macros.hpp>
++
++#include <rex/filesystem/devices/host_path_device.h>
++#include <rex/filesystem/vfs.h>
++
++namespace fs = std::filesystem;
++
++namespace {
++
++struct TempDirectory {
++  TempDirectory()
++      : path(fs::temp_directory_path() /
++             ("rex_guest_cache_" +
++              std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
++    fs::create_directories(path);
++  }
++
++  ~TempDirectory() {
++    std::error_code ec;
++    fs::remove_all(path, ec);
++  }
++
++  fs::path path;
++};
++
++bool MountWritableCache(rex::filesystem::VirtualFileSystem& vfs, const fs::path& root,
++                        std::string_view link, std::string_view mount) {
++  auto device =
++      std::make_unique<rex::filesystem::HostPathDevice>(mount, root, false /* writable */);
++  return device->Initialize() && vfs.RegisterDevice(std::move(device)) &&
++         vfs.RegisterSymbolicLink(link, mount);
++}
++
++}  // namespace
++
++TEST_CASE("Guest cache devices resolve to separate writable host roots", "[system][vfs]") {
++  TempDirectory temp;
++  rex::filesystem::VirtualFileSystem vfs;
++
++  REQUIRE(MountWritableCache(vfs, temp.path / "cache0", "cache0:", "\\CACHE0"));
++  REQUIRE(MountWritableCache(vfs, temp.path / "cache1", "cache1:", "\\CACHE1"));
++  REQUIRE(MountWritableCache(vfs, temp.path / "cache", "cache:", "\\CACHE"));
++
++  REQUIRE(vfs.ResolvePath("cache:\\") != nullptr);
++  REQUIRE(vfs.ResolvePath("cache0:\\") != nullptr);
++  REQUIRE(vfs.ResolvePath("cache1:\\") != nullptr);
++
++  REQUIRE(vfs.CreatePath("cache:\\replay_stream", rex::filesystem::kFileAttributeNormal) !=
++          nullptr);
++  CHECK(fs::exists(temp.path / "cache" / "replay_stream"));
++  CHECK_FALSE(fs::exists(temp.path / "cache0" / "replay_stream"));
++  CHECK_FALSE(fs::exists(temp.path / "cache1" / "replay_stream"));
++}

@@ -1,0 +1,128 @@
+From b07311097b9617f2d0fbd66dc3f7fe996d3d253f Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Thu, 13 Aug 2026 18:02:25 +0300
+Subject: [PATCH 06/11] Batch initial function registration
+
+shiftglue port: the `notify` parameter of FunctionGraph::addFunction()
+(introduced in FM4 by the skipped cebbe53) is added here, and the CONFIG
+registration keeps shiftglue's `node` result for shareRegisters.
+---
+ include/rex/codegen/function_graph.h |  4 ++--
+ src/codegen/function_graph.cpp       | 12 +++++++-----
+ src/codegen/phase_register.cpp       | 15 +++++++++------
+ 3 files changed, 18 insertions(+), 13 deletions(-)
+
+diff --git a/include/rex/codegen/function_graph.h b/include/rex/codegen/function_graph.h
+index bef2515..d3b922d 100644
+--- a/include/rex/codegen/function_graph.h
++++ b/include/rex/codegen/function_graph.h
+@@ -57,11 +57,11 @@ class FunctionGraph {
+   // Notifies all PENDING functions to try resolution against the new entry.
+   // hasXrefs: true if this is a known call target (bl target, etc.)
+   FunctionNode* addFunction(uint32_t base, uint32_t size, FunctionAuthority authority,
+-                            bool hasXrefs = false);
++                            bool hasXrefs = false, bool notify = true);
+ 
+   // Add a named function to the graph (convenience overload)
+   FunctionNode* addFunction(uint32_t base, uint32_t size, FunctionAuthority authority,
+-                            std::string_view name, bool hasXrefs = false);
++                            std::string_view name, bool hasXrefs = false, bool notify = true);
+ 
+   // Add a resolved import as a callable function with __imp__ name
+   // Address is the thunk address that bl instructions target
+diff --git a/src/codegen/function_graph.cpp b/src/codegen/function_graph.cpp
+index e23ec8b..30dd76b 100644
+--- a/src/codegen/function_graph.cpp
++++ b/src/codegen/function_graph.cpp
+@@ -826,7 +826,7 @@ void FunctionGraph::updateFunctionCodePointers() {
+ //=============================================================================
+ 
+ FunctionNode* FunctionGraph::addFunction(uint32_t base, uint32_t size, FunctionAuthority authority,
+-                                         bool hasXrefs) {
++                                         bool hasXrefs, bool notify) {
+   // Check for existing function at this address
+   auto it = functions_.find(base);
+   if (it != functions_.end()) {
+@@ -854,15 +854,17 @@ FunctionNode* FunctionGraph::addFunction(uint32_t base, uint32_t size, FunctionA
+   // Track xrefs for merge eligibility
+   functionHasXrefs_[base] = hasXrefs;
+ 
+-  // Notify all PENDING functions
+-  notifyFunctionAdded(nodePtr);
++  // Notify all PENDING functions unless a phase adds a batch before resolution.
++  if (notify) {
++    notifyFunctionAdded(nodePtr);
++  }
+ 
+   return nodePtr;
+ }
+ 
+ FunctionNode* FunctionGraph::addFunction(uint32_t base, uint32_t size, FunctionAuthority authority,
+-                                         std::string_view name, bool hasXrefs) {
+-  auto* node = addFunction(base, size, authority, hasXrefs);
++                                         std::string_view name, bool hasXrefs, bool notify) {
++  auto* node = addFunction(base, size, authority, hasXrefs, notify);
+   if (node && !name.empty()) {
+     node->setName(std::string(name));
+   }
+diff --git a/src/codegen/phase_register.cpp b/src/codegen/phase_register.cpp
+index ffaa51c..372bf7f 100644
+--- a/src/codegen/phase_register.cpp
++++ b/src/codegen/phase_register.cpp
+@@ -515,7 +515,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
+     for (size_t i = 14; i <= endReg; i++) {
+       uint32_t addr = base14 + static_cast<uint32_t>((i - 14) * stride);
+       uint32_t size = static_cast<uint32_t>((endReg + 1 - i) * stride + extraSize);
+-      graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
++      graph.addFunction(addr, size, FunctionAuthority::HELPER, true, false);
+       graph.setFunctionName(addr, fmt::format("{}{}", prefix, i));
+     }
+   };
+@@ -532,7 +532,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
+     for (size_t i = 64; i < 128; i++) {
+       uint32_t addr = state.restVmx64Address + static_cast<uint32_t>((i - 64) * 8);
+       uint32_t size = static_cast<uint32_t>((128 - i) * 8 + 4);
+-      graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
++      graph.addFunction(addr, size, FunctionAuthority::HELPER, true, false);
+       graph.setFunctionName(addr, fmt::format("__restvmx_{}", i));
+     }
+   }
+@@ -540,7 +540,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
+     for (size_t i = 64; i < 128; i++) {
+       uint32_t addr = state.saveVmx64Address + static_cast<uint32_t>((i - 64) * 8);
+       uint32_t size = static_cast<uint32_t>((128 - i) * 8 + 4);
+-      graph.addFunction(addr, size, FunctionAuthority::HELPER, true);
++      graph.addFunction(addr, size, FunctionAuthority::HELPER, true, false);
+       graph.setFunctionName(addr, fmt::format("__savevmx_{}", i));
+     }
+   }
+@@ -550,7 +550,10 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
+   for (const auto& [address, cfg] : config.functions) {
+     uint32_t size = cfg.getSize(address);
+     std::string name = cfg.name.empty() ? fmt::format("sub_{:08X}", address) : cfg.name;
+-    auto* node = graph.addFunction(address, size, FunctionAuthority::CONFIG, true);
++    // Register-phase entries arrive before discovery creates unresolved jumps.
++    // Do not notify every earlier pending node for every entry in this batch.
++    // Large continuation censuses otherwise make this loop quadratic.
++    auto* node = graph.addFunction(address, size, FunctionAuthority::CONFIG, true, false);
+     graph.setFunctionName(address, name);
+     if (node && cfg.shareRegisters) {
+       node->setSharesRegisters(true);
+@@ -645,7 +648,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
+       }
+     }
+ 
+-    graph.addFunction(beginAddr, size, FunctionAuthority::PDATA, true);
++    graph.addFunction(beginAddr, size, FunctionAuthority::PDATA, true, false);
+     graph.setFunctionHasExceptionHandler(beginAddr, fn.ExceptionFlag);
+ 
+     if (exInfo && exInfo->info.hasInfo()) {
+@@ -683,7 +686,7 @@ VoidResult registerEntryPoints(CodegenContext& ctx) {
+     if (graph.isImport(addr))
+       continue;
+ 
+-    graph.addFunction(addr, 0, FunctionAuthority::DISCOVERED, true);
++    graph.addFunction(addr, 0, FunctionAuthority::DISCOVERED, true, false);
+     ehFuncsQueued++;
+   }
+ 

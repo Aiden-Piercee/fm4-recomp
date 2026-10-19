@@ -77,6 +77,29 @@ the next build. `-SdkOnly` rebuilds only the SDK and refreshes
 `rexgpu-xenos.dll` in an existing local build. See
 [`sdk-patches/README.md`](sdk-patches/README.md).
 
+`0001-d3d12-deferred-readback-sync.patch` adds
+`d3d12_readback_resolve_deferred_sync` (default off). With full host-copy
+readback it records each resolve's copy into guest RAM and waits for the GPU
+once, at the next guest-visible sync point (scratch-register or memory
+writeback, `EVENT_WRITE_SHD`, interrupt, swap, or command-processor stall),
+instead of draining the queue after every resolve. Enable it per run with
+`Run-Local.ps1 -DeferredReadbackSync` or `Launch FM4 (Fast Readback).bat`, and
+compare the `readback stats/300f` lines in `fm4.log` (`deferred` vs `sync
+waits` and `ms waiting`) against the validated preset.
+
+`0002-native-executor.patch` adds the opt-in native D3D12 render target path
+(`render_target_path_d3d12 = "native"`), ported from shiftglue-sdk, plus the
+`native_executor_gpu_profile`, `native_executor_stencil_ref_transfers`,
+`frame_time_stats_window` and `deferred_readback_flush_mask` cvars.
+See [Native D3D12 renderer](docs/NATIVE_RENDERER.md) and the attribution in
+`THIRD_PARTY_NOTICES.md`.
+
+`sdk-patches-shiftglue/` is a separate, untested series that carries FM4's SDK
+commits onto shiftglue-sdk. The builder does not apply it; see its README.
+
+`-Jobs` now defaults to automatic: one job per logical processor, capped at
+about 2 GB of free RAM per job (`FM4_GB_PER_JOB` tunes it).
+
 ## Per-run runtime settings
 
 `tools/Run-Local.ps1 -RuntimeArgs "--name=value,--other=value"` changes runtime

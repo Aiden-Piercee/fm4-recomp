@@ -1,0 +1,165 @@
+From b893d9595dd649dfe97adcac22e8f665a7edf10f Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Mon, 10 Aug 2026 13:44:19 +0300
+Subject: [PATCH 01/11] follow parent control flow from reentry chunks
+
+shiftglue port: classifyTarget() already takes the emitting FunctionNode
+in shiftglue, so the builder call-site hunks keep shiftglue's
+`fn`/`ctx.fn` form; the parent-extent discovery changes apply unchanged.
+---
+ include/rex/codegen/function_scanner.h |  3 ++-
+ src/codegen/function_graph.cpp         | 14 +++++---------
+ src/codegen/function_scanner.cpp       | 14 ++++++++------
+ src/codegen/phase_discover.cpp         | 25 +++++++++++++++++++++++--
+ 4 files changed, 38 insertions(+), 18 deletions(-)
+
+diff --git a/include/rex/codegen/function_scanner.h b/include/rex/codegen/function_scanner.h
+index d5a3654..21bff94 100644
+--- a/include/rex/codegen/function_scanner.h
++++ b/include/rex/codegen/function_scanner.h
+@@ -256,7 +256,8 @@ struct BlockDiscoveryResult {
+ BlockDiscoveryResult discoverBlocks(
+     DecodedBinary& decoded, uint32_t entryPoint, const CodeRegion& containingRegion,
+     const std::unordered_set<uint32_t>& knownFunctions, uint32_t pdataSize = 0,
+-    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables = nullptr);
++    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables = nullptr,
++    uint32_t extentStart = 0);
+ 
+ //=============================================================================
+ // Jump Table Detection
+diff --git a/src/codegen/function_graph.cpp b/src/codegen/function_graph.cpp
+index 8b307e5..b0df537 100644
+--- a/src/codegen/function_graph.cpp
++++ b/src/codegen/function_graph.cpp
+@@ -146,17 +146,13 @@ void FunctionNode::addBlock(Block block) {
+ }
+ 
+ bool FunctionNode::containsAddress(uint32_t addr) const {
+-  // First check overall bounds
+-  if (addr < base_ || addr >= base_ + size_) {
+-    return false;
+-  }
+-
+-  // If no blocks defined, use linear range
++  // If no blocks are defined, use the declared linear range.
+   if (blocks_.empty()) {
+-    return true;
++    return addr >= base_ && addr < base_ + size_;
+   }
+ 
+-  // Check individual blocks
++  // A reentry chunk can branch backward into its parent. Its discovered blocks
++  // can therefore start before the chunk entry and its declared linear range.
+   for (const auto& block : blocks_) {
+     if (block.contains(addr)) {
+       return true;
+@@ -166,7 +162,7 @@ bool FunctionNode::containsAddress(uint32_t addr) const {
+   // For CONFIG and PDATA functions, trust the declared size even if blocks don't cover it
+   // This handles out-of-line switch cases where compiler places code after epilogue
+   if (authority_ == FunctionAuthority::CONFIG || authority_ == FunctionAuthority::PDATA) {
+-    return true;  // Already passed bounds check above
++    return addr >= base_ && addr < base_ + size_;
+   }
+ 
+   return false;
+diff --git a/src/codegen/function_scanner.cpp b/src/codegen/function_scanner.cpp
+index c93a482..f70150d 100644
+--- a/src/codegen/function_scanner.cpp
++++ b/src/codegen/function_scanner.cpp
+@@ -1822,14 +1822,16 @@ std::optional<JumpTable> detectJumpTable(DecodedBinary& decoded, uint32_t bctrAd
+ BlockDiscoveryResult discoverBlocks(
+     DecodedBinary& decoded, uint32_t entryPoint, const CodeRegion& containingRegion,
+     const std::unordered_set<uint32_t>& knownFunctions, uint32_t pdataSize,
+-    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables) {
++    const std::unordered_map<uint32_t, JumpTable>* manualSwitchTables, uint32_t extentStart) {
+   BlockDiscoveryResult result;
+   std::unordered_set<uint32_t> visited;
+   std::unordered_set<uint32_t> blockStarts;
+   std::queue<uint32_t> worklist;
+ 
+-  // Function extent - use pdataSize when available
+-  uint32_t funcEnd = (pdataSize > 0) ? (entryPoint + pdataSize) : containingRegion.end;
++  // A chunk can enter in the middle of its parent and branch to an earlier
++  // parent label. Use the parent extent for that case.
++  uint32_t funcStart = extentStart != 0 ? extentStart : entryPoint;
++  uint32_t funcEnd = (pdataSize > 0) ? (funcStart + pdataSize) : containingRegion.end;
+ 
+   REXCODEGEN_TRACE(
+       "discoverBlocks: entry=0x{:08X} pdataSize={} funcEnd=0x{:08X} region=[0x{:08X}-0x{:08X}]",
+@@ -1837,7 +1839,7 @@ BlockDiscoveryResult discoverBlocks(
+ 
+   // Helper to check if address is within function bounds
+   auto isWithinFunction = [&](uint32_t addr) -> bool {
+-    return addr >= entryPoint && addr < funcEnd;
++    return addr >= funcStart && addr < funcEnd;
+   };
+ 
+   // Start with entry point
+@@ -1880,7 +1882,7 @@ BlockDiscoveryResult discoverBlocks(
+         // Uses funcEnd (from pdataSize or region) defined at top of function
+         auto isInternalTarget = [&](uint32_t t) -> bool {
+           // Must be within function bounds
+-          if (t < entryPoint || t >= funcEnd) {
++          if (t < funcStart || t >= funcEnd) {
+             return false;
+           }
+           // Must not be a known function entry (except our own entry point)
+@@ -1942,7 +1944,7 @@ BlockDiscoveryResult discoverBlocks(
+             }
+           }
+           if (!jt) {
+-            jt = detectJumpTable(decoded, addr, containingRegion, entryPoint, funcEnd);
++            jt = detectJumpTable(decoded, addr, containingRegion, funcStart, funcEnd);
+           }
+           if (jt) {
+             REXCODEGEN_TRACE("discoverBlocks: detected jump table at bctr 0x{:08X} with {} targets",
+diff --git a/src/codegen/phase_discover.cpp b/src/codegen/phase_discover.cpp
+index 1c73548..186fdb2 100644
+--- a/src/codegen/phase_discover.cpp
++++ b/src/codegen/phase_discover.cpp
+@@ -65,6 +65,8 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
+ 
+   // Lookup pdataSize for exception handler boundary
+   uint32_t pdataSize = 0;
++  uint32_t extentStart = 0;
++  std::unordered_set<uint32_t> discoveryFunctions = knownFunctions;
+ 
+   // For CONFIG functions: use only the explicitly declared size (if any)
+   // If no size specified (size=0), let discovery find natural boundaries via region
+@@ -72,6 +74,25 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
+   if (node->authority() == FunctionAuthority::CONFIG) {
+     pdataSize = node->size();  // 0 if not specified, which is correct
+     REXCODEGEN_TRACE("Analyze: 0x{:08X} is CONFIG, using declared size={}", funcAddr, pdataSize);
++
++    auto cfgIt = ctx.Config().functions.find(funcAddr);
++    if (cfgIt != ctx.Config().functions.end() && cfgIt->second.isChunk()) {
++      extentStart = cfgIt->second.parent;
++      if (auto* parent = graph.getFunction(extentStart)) {
++        pdataSize = parent->size();
++      }
++
++      // PDATA defines this complete parent extent. Any provisional entry in
++      // that range is an internal label for a reentry scan, not a tail call.
++      if (pdataSize > 0) {
++        std::erase_if(discoveryFunctions, [&](uint32_t address) {
++          return address >= extentStart && address < extentStart + pdataSize;
++        });
++      }
++      REXCODEGEN_TRACE(
++          "Analyze: chunk 0x{:08X} uses parent extent 0x{:08X}+0x{:X}", funcAddr,
++          extentStart, pdataSize);
++    }
+   } else {
+     // For non-CONFIG functions, use PDATA size if available
+     auto pdataIt = ctx.scan.pdataSizes.find(funcAddr);
+@@ -95,8 +116,8 @@ void discoverFunction(CodegenContext& ctx, uint32_t funcAddr,
+   }
+ 
+   // Pass pdataSize so forward branches within function extent are correctly identified
+-  auto result = discoverBlocks(decoded, funcAddr, *region, knownFunctions, pdataSize,
+-                               &ctx.Config().switchTables);
++  auto result = discoverBlocks(decoded, funcAddr, *region, discoveryFunctions, pdataSize,
++                               &ctx.Config().switchTables, extentStart);
+ 
+   if (result.blocks.empty()) {
+     REXCODEGEN_WARN("Analyze: no blocks found for function 0x{:08X}", funcAddr);

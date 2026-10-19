@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$GameDataRoot,
-    [ValidateRange(1, 64)][int]$Jobs = 2,
+    # 0 = automatic: one job per logical processor, capped by free RAM.
+    [ValidateRange(0, 64)][int]$Jobs = 0,
     [string]$SdkSourceRoot,
     [switch]$ValidateOnly,
     # Rebuild only the (patched) SDK and refresh the GPU plugin in the existing
@@ -34,6 +35,26 @@ if ($ValidateOnly) {
     return
 }
 
+if ($Jobs -eq 0) {
+    $logicalProcessors = [Environment]::ProcessorCount
+    $freeRamGb = 0
+    try {
+        # FreePhysicalMemory is reported in KiB.
+        $freeRamGb = [math]::Floor((Get-CimInstance -ClassName Win32_OperatingSystem).FreePhysicalMemory / 1MB)
+    }
+    catch {
+        $freeRamGb = 0
+    }
+    # Recompiled translation units are large; budget about 2 GB of RAM per
+    # compiler process so a 32-thread build does not exhaust memory.
+    # Set FM4_GB_PER_JOB (e.g. 1.5) to tune it, or pass -Jobs to force a count.
+    $gbPerJob = 2.0
+    if ($env:FM4_GB_PER_JOB) { $gbPerJob = [math]::Max(0.5, [double]$env:FM4_GB_PER_JOB) }
+    $jobsByMemory = if ($freeRamGb -gt 0) { [math]::Max(1, [math]::Floor($freeRamGb / $gbPerJob)) } else { 2 }
+    $Jobs = [int][math]::Max(1, [math]::Min(64, [math]::Min($logicalProcessors, $jobsByMemory)))
+    Write-Host "Using $Jobs parallel build jobs ($logicalProcessors logical processors, $freeRamGb GB free RAM). Override with -Jobs."
+}
+
 $localRoot = Join-Path $root ".local"
 $sdkSource = if ($SdkSourceRoot) { [IO.Path]::GetFullPath($SdkSourceRoot) } else { Join-Path $localRoot "rexglue-sdk" }
 [IO.Directory]::CreateDirectory($localRoot) | Out-Null
@@ -50,7 +71,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $sdkSource ".git"))) {
     Invoke-CheckedNative -FilePath $git -ArgumentList @("submodule", "update", "--init", "--recursive") -WorkingDirectory $sdkSource
 }
 
-$sdkHead = (& $git -C $sdkSource rev-parse HEAD).Trim()
+$sdkHead = "$(& $git -C $sdkSource rev-parse HEAD)".Trim()
+if ($LASTEXITCODE -ne 0) {
+    throw "Git could not read the SDK checkout at $sdkSource. If Git reported dubious ownership, run: git config --global --add safe.directory `"$($sdkSource.Replace('\', '/'))`""
+}
 if ($LASTEXITCODE -ne 0 -or $sdkHead -ne $policy.sdk.commit) {
     throw "SDK checkout is not at the required commit $($policy.sdk.commit): $sdkHead"
 }

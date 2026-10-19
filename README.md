@@ -136,13 +136,51 @@ Extract the four marketplace-content packages from your own Disc 2 into one
 directory, then run:
 
 ```powershell
-.\Launch FM4 Disc 2 Install.bat "D:\path\to\disc2-packages"
+.\lfm4d2.bat "D:\path\to\disc2-packages"
 ```
 
 The installer validates each STFS package's title ID and content type before
 passing it to ReXGlue's content manager. Existing packages are skipped. After
 installation, normal launches use the copy in user data and no longer require
 the source directory.
+
+## Post-launch DLC
+
+`Launch FM4.bat` also installs FM4 marketplace DLC packages from your own
+copy. It looks in the repository's `dlc-content` folder (git-ignored), or
+the developer's local DLC folder hard-coded in the launcher if that is missing,
+and passes it to `Run-Local.ps1 -DlcContentRoot`. The game accepts any STFS file
+whose header identifies it as FM4 marketplace content, installs it once into
+user data, and skips it on later launches. Other sources: the `FM4_DLC_ROOT`
+environment variable and the `fm4_dlc_content_root` cvar. Set
+`fm4_auto_install_dlc_content = false` to turn this off.
+
+## Launchers
+
+| Launcher | Purpose |
+|---|---|
+| `Build FM4.bat` | Runs the local builder (`tools\Build-Local.ps1`). |
+| `Launch FM4.bat` | Runs the validated profile, installing DLC as above. |
+| `Launch FM4 (Fast Readback).bat` | Same, with the experimental deferred readback sync (`-DeferredReadbackSync`). |
+| `Launch FM4 (File Trace).bat` | Logs every file the game opens (`-TraceFiles`). |
+| `Launch FM4 (Model Trace).bat` | Logs model archive reads to `serial_trace.log` (`-SerialTrace`). |
+| `lfm4d2.bat` | One-time Disc 2 package install (see above). |
+
+## Experimental work
+
+These are under active development and are not part of the validated
+profile:
+
+- An opt-in native D3D12 render path (`render_target_path_d3d12 = "native"`,
+  SDK patch `sdk-patches/0002-native-executor.patch`). In the tested race it
+  matches the validated output and runs at about 48 FPS on average at 1x, and
+  it supports 2x and 3x internal resolution. See
+  [Native D3D12 renderer](docs/NATIVE_RENDERER.md).
+- Deferred resolve readback sync (SDK patch 0001). See [Build notes](BUILD-NOTES.md).
+- Tools that convert cars from other Forza titles (Forza Horizon 1 to 3,
+  Forza Motorsport 2 and 3) into FM4 DLC packages, for use with your own
+  copies of those games. See [Car port handoff](docs/CAR-PORT-HANDOFF.md) and
+  the [global todo list](GLOBAL_TODO.md).
 
 ## Development notes
 
@@ -156,6 +194,8 @@ Maintainers prepare draft releases with the
 - [Current status and limitations](docs/STATUS.md)
 - [Reusable findings and upstream candidates](docs/CONTRIBUTIONS.md)
 - [Canonical documentation sources](docs/canonical-sources.md)
+- [Native D3D12 renderer](docs/NATIVE_RENDERER.md)
+- [Car port handoff](docs/CAR-PORT-HANDOFF.md)
 
 ## Repository policy
 

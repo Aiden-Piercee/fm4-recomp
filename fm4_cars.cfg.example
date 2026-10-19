@@ -1,0 +1,15 @@
+# Copy to "fm4_cars.cfg" (same folder you launch the game from, or point FM4_CARS_CFG at it).
+# Saved changes are picked up within about half a second, no rebuild needed.
+# off= lists fixes to DISABLE (default: all on). Names:
+#   queue    task queue relocated to 64 entries      (needs a game relaunch to change)
+#   box1     17-entry number cache -> 256            (needs a game relaunch to change)
+#   box2     16-entry indexed cache -> 64            (needs a game relaunch to change)
+#   peer     skip car index >= 16 in the per-car peer table
+#   listcap  cap the 16-entry list copy at 16
+#   heappad  extra tail room on every small allocation
+#   dtorskip skip garbage slot objects in the node destructor
+#   probes   diagnostic log lines
+#   lookupwait wait for a half-built object in the loader lookup (skip it after 3 s)
+off=
+# heappad=N : tail room = size >> N  (0 = +100%, 1 = +50%, 2 = +25%)
+heappad=0

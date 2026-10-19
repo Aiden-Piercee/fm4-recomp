@@ -1,0 +1,305 @@
+From 93c6083e1c3abcc7e6bb0b13b54d464869bacebb Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Mon, 10 Aug 2026 19:30:47 +0300
+Subject: [PATCH 03/11] add cooperative guest checkpoint boundary
+
+shiftglue port: the checkpoint include moves to pch_h.inja (shiftglue's
+home for the former init_h.inja SDK block); xthread.cpp keeps
+shiftglue's setjmp-based reentry instead of ReenterException.
+---
+ include/rex/rex_app.h                  |  1 +
+ include/rex/system/checkpoint.h        | 28 +++++++++
+ resources/templates/codegen/pch_h.inja |  1 +
+ src/codegen/function_graph.cpp         |  2 +
+ src/system/xthread.cpp                 | 84 ++++++++++++++++++++++++++
+ src/ui/rex_app.cpp                     | 44 ++++++++++++++
+ 6 files changed, 160 insertions(+)
+ create mode 100644 include/rex/system/checkpoint.h
+
+diff --git a/include/rex/rex_app.h b/include/rex/rex_app.h
+index 878f4b9..7008940 100644
+--- a/include/rex/rex_app.h
++++ b/include/rex/rex_app.h
+@@ -322,6 +322,7 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
+   uint64_t achievement_notification_listener_ = 0;
+   ui::DebugOverlayDialog::FrameStatsProvider frame_stats_provider_;
+   std::filesystem::path config_path_;
++  std::jthread checkpoint_probe_thread_;
+ };
+ 
+ }  // namespace rex
+diff --git a/include/rex/system/checkpoint.h b/include/rex/system/checkpoint.h
+new file mode 100644
+index 0000000..19a89e9
+--- /dev/null
++++ b/include/rex/system/checkpoint.h
+@@ -0,0 +1,28 @@
++/**
++ * @file        system/checkpoint.h
++ * @brief       Cooperative guest checkpoint boundary probe
++ */
++
++#pragma once
++
++#include <cstdint>
++
++struct PPCContext;
++
++namespace rex::system {
++
++struct CheckpointProbeResult {
++  bool reached = false;
++  uint32_t thread_id = 0;
++  uint32_t guest_address = 0;
++  uint32_t guest_lr = 0;
++  uint32_t guest_stack_pointer = 0;
++};
++
++/** Called at the entry of each generated guest function. */
++void PollCheckpointBoundary(PPCContext& context, uint32_t guest_address);
++
++/** Park and resume the main guest thread at a generated function boundary. */
++CheckpointProbeResult ProbeMainThreadCheckpoint(uint32_t timeout_ms = 2000);
++
++}  // namespace rex::system
+diff --git a/resources/templates/codegen/pch_h.inja b/resources/templates/codegen/pch_h.inja
+index 857b429..eb03f55 100644
+--- a/resources/templates/codegen/pch_h.inja
++++ b/resources/templates/codegen/pch_h.inja
+@@ -35,6 +35,7 @@
+ #include <rex/chrono/clock.h>
+ #include <rex/perf/counter.h>
+ #include <rex/thread/mutex.h>
++#include <rex/system/checkpoint.h>
+ #include <rex/system/mmio_handler.h>
+ 
+ #include <atomic>
+diff --git a/src/codegen/function_graph.cpp b/src/codegen/function_graph.cpp
+index dee62cf..0832c71 100644
+--- a/src/codegen/function_graph.cpp
++++ b/src/codegen/function_graph.cpp
+@@ -398,6 +398,7 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+     emit_println(out, "// STUB: Function at 0x{:08X} has no discovered code blocks", base());
+     emit_println(out, "DEFINE_REX_FUNC({}) {{", name);
+     emit_println(out, "\tREX_FUNC_PROLOGUE();");
++    emit_println(out, "\trex::system::PollCheckpointBoundary(ctx, 0x{:08X});", base());
+     emit_println(out, "}}\n");
+     return out;
+   }
+@@ -532,6 +533,7 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+   // Function signature with weak/alias pattern
+   emit_println(out, "DEFINE_REX_FUNC({}) {{", name);
+   emit_println(out, "\tREX_FUNC_PROLOGUE();");
++  emit_println(out, "\trex::system::PollCheckpointBoundary(ctx, 0x{:08X});", base());
+ 
+   // --- Second pass: emit instruction code ---
+   const JumpTable* activeJt = nullptr;
+diff --git a/src/system/xthread.cpp b/src/system/xthread.cpp
+index 72af232..d6f35b7 100644
+--- a/src/system/xthread.cpp
++++ b/src/system/xthread.cpp
+@@ -13,6 +13,8 @@
+ #include <array>
+ #include <atomic>
+ #include <cstdlib>
++#include <chrono>
++#include <condition_variable>
+ #include <cstring>
+ 
+ #include <fmt/format.h>
+@@ -29,6 +31,7 @@
+ #include <rex/runtime.h>
+ #include <rex/stream.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/checkpoint.h>
+ #include <rex/system/function_dispatcher.h>
+ #include <rex/system/thread_state.h>
+ #include <rex/system/user_module.h>
+@@ -236,12 +239,93 @@ thread_local XThread* current_xthread_tls_ = nullptr;
+ 
+ namespace {
+ 
++struct CheckpointProbeState {
++  std::mutex mutex;
++  std::condition_variable condition;
++  std::atomic<bool> requested{false};
++  uint32_t target_thread_id = 0;
++  bool parked = false;
++  uint32_t guest_address = 0;
++  uint32_t guest_lr = 0;
++  uint32_t guest_stack_pointer = 0;
++};
++
++CheckpointProbeState checkpoint_probe;
++
+ XThread* GetBoundCurrentXThread() {
+   return current_xthread_tls_;
+ }
+ 
+ }  // namespace
+ 
++void PollCheckpointBoundary(PPCContext& context, uint32_t guest_address) {
++  if (!checkpoint_probe.requested.load(std::memory_order_acquire) || !XThread::IsInThread()) {
++    return;
++  }
++  auto* thread = XThread::GetCurrentThread();
++  std::unique_lock lock(checkpoint_probe.mutex);
++  if (!checkpoint_probe.requested.load(std::memory_order_relaxed) ||
++      checkpoint_probe.target_thread_id != thread->thread_id()) {
++    return;
++  }
++  checkpoint_probe.guest_address = guest_address;
++  checkpoint_probe.guest_lr = static_cast<uint32_t>(context.lr);
++  checkpoint_probe.guest_stack_pointer = context.r1.u32;
++  checkpoint_probe.parked = true;
++  checkpoint_probe.condition.notify_all();
++  checkpoint_probe.condition.wait(lock, [] {
++    return !checkpoint_probe.requested.load(std::memory_order_acquire);
++  });
++  checkpoint_probe.parked = false;
++  checkpoint_probe.condition.notify_all();
++}
++
++CheckpointProbeResult ProbeMainThreadCheckpoint(uint32_t timeout_ms) {
++  CheckpointProbeResult result;
++  auto* runtime = Runtime::instance();
++  if (!runtime || !runtime->kernel_state()) {
++    return result;
++  }
++
++  object_ref<XThread> target;
++  for (auto thread : runtime->kernel_state()->object_table()->GetObjectsByType<XThread>()) {
++    if (thread->is_guest_thread() && thread->main_thread() && thread->is_running()) {
++      target = thread;
++      break;
++    }
++  }
++  if (!target) {
++    return result;
++  }
++
++  std::unique_lock lock(checkpoint_probe.mutex);
++  if (checkpoint_probe.requested.load(std::memory_order_relaxed) || checkpoint_probe.parked) {
++    return result;
++  }
++  checkpoint_probe.target_thread_id = target->thread_id();
++  checkpoint_probe.guest_address = 0;
++  checkpoint_probe.guest_lr = 0;
++  checkpoint_probe.guest_stack_pointer = 0;
++  checkpoint_probe.requested.store(true, std::memory_order_release);
++  const bool reached = checkpoint_probe.condition.wait_for(
++      lock, std::chrono::milliseconds(timeout_ms), [] { return checkpoint_probe.parked; });
++  if (reached) {
++    result.reached = true;
++    result.thread_id = checkpoint_probe.target_thread_id;
++    result.guest_address = checkpoint_probe.guest_address;
++    result.guest_lr = checkpoint_probe.guest_lr;
++    result.guest_stack_pointer = checkpoint_probe.guest_stack_pointer;
++  }
++  checkpoint_probe.requested.store(false, std::memory_order_release);
++  checkpoint_probe.condition.notify_all();
++  if (reached) {
++    checkpoint_probe.condition.wait_for(
++        lock, std::chrono::milliseconds(timeout_ms), [] { return !checkpoint_probe.parked; });
++  }
++  checkpoint_probe.target_thread_id = 0;
++  return result;
++}
++
+ bool XThread::IsInThread() {
+   return GetBoundCurrentXThread() != nullptr;
+ }
+diff --git a/src/ui/rex_app.cpp b/src/ui/rex_app.cpp
+index bf0d3a2..a2f198b 100644
+--- a/src/ui/rex_app.cpp
++++ b/src/ui/rex_app.cpp
+@@ -38,6 +38,7 @@
+ #include <rex/system/achievement_manager.h>
+ #include <rex/system/gpu_plugin.h>
+ #include <rex/system/kernel_state.h>
++#include <rex/system/checkpoint.h>
+ #include <rex/system/xthread.h>
+ #include <rex/ui/graphics_provider.h>
+ #include <rex/ui/keybinds.h>
+@@ -50,6 +51,7 @@
+ #include <imgui.h>
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <filesystem>
+ #include <string_view>
+ 
+@@ -63,6 +65,10 @@ REXCVAR_DEFINE_STRING(gpu_backend, "any", "GPU",
+     .allowed({"any", "d3d12", "vulkan", "null"})
+     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+ 
++REXCVAR_DEFINE_INT32(checkpoint_probe_after_ms, 0, "Debug",
++                     "Probe a guest checkpoint boundary after this startup delay; zero disables it")
++    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
++
+ namespace rex {
+ 
+ // --- ReXApp ---
+@@ -491,6 +497,16 @@ void ReXApp::SetupOverlays(rex::ui::Presenter* presenter, rex::ui::ImmediateDraw
+       settings_overlay_ = std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
+     }
+   });
++  rex::ui::RegisterBind("bind_checkpoint_probe", "F5", "Probe guest checkpoint boundary", [] {
++    const auto result = system::ProbeMainThreadCheckpoint();
++    if (result.reached) {
++      REXLOG_INFO("Checkpoint boundary reached: thread={} pc={:08X} lr={:08X} r1={:08X}",
++                  result.thread_id, result.guest_address, result.guest_lr,
++                  result.guest_stack_pointer);
++    } else {
++      REXLOG_WARN("Checkpoint boundary probe timed out");
++    }
++  });
+   rex::ui::RegisterBind("bind_achievements", "F7", "Toggle achievements overlay", [this] {
+     if (achievements_overlay_) {
+       achievements_overlay_.reset();
+@@ -548,6 +564,28 @@ void ReXApp::LaunchModule() {
+     }
+     main_thread->Resume();
+ 
++    const int32_t checkpoint_probe_delay = REXCVAR_GET(checkpoint_probe_after_ms);
++    if (checkpoint_probe_delay > 0) {
++      checkpoint_probe_thread_ = std::jthread([this, checkpoint_probe_delay](std::stop_token stop) {
++        const auto deadline = std::chrono::steady_clock::now() +
++                              std::chrono::milliseconds(checkpoint_probe_delay);
++        while (!stop.stop_requested() && std::chrono::steady_clock::now() < deadline) {
++          std::this_thread::sleep_for(std::chrono::milliseconds(50));
++        }
++        if (stop.stop_requested() || shutting_down_.load(std::memory_order_acquire)) {
++          return;
++        }
++        const auto result = system::ProbeMainThreadCheckpoint();
++        if (result.reached) {
++          REXLOG_INFO("Checkpoint boundary reached: thread={} pc={:08X} lr={:08X} r1={:08X}",
++                      result.thread_id, result.guest_address, result.guest_lr,
++                      result.guest_stack_pointer);
++        } else {
++          REXLOG_WARN("Checkpoint boundary probe timed out");
++        }
++      });
++    }
++
+     module_thread_ = std::thread([this, main_thread = std::move(main_thread)]() mutable {
+       main_thread->Wait(0, 0, 0, nullptr);
+       OnGuestThreadExit(main_thread.get());
+@@ -637,10 +675,16 @@ void ReXApp::OnDestroy() {
+   // Notify subclass before cleanup
+   OnShutdown();
+ 
++  checkpoint_probe_thread_.request_stop();
++  if (checkpoint_probe_thread_.joinable()) {
++    checkpoint_probe_thread_.join();
++  }
++
+   // Unregister overlay keybinds before destroying dialogs
+   rex::ui::UnregisterBind("bind_debug_overlay");
+   rex::ui::UnregisterBind("bind_console");
+   rex::ui::UnregisterBind("bind_settings");
++  rex::ui::UnregisterBind("bind_checkpoint_probe");
+   rex::ui::UnregisterBind("bind_achievements");
+ 
+   // ImGui cleanup (reverse of setup)

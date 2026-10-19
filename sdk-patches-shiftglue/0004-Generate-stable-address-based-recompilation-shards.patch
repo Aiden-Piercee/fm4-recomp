@@ -1,0 +1,49 @@
+From 7f107233e8a7c587d082f5c6a6d90f830909ef0a Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Mon, 10 Aug 2026 23:47:27 +0300
+Subject: [PATCH 04/11] Generate stable address-based recompilation shards
+
+shiftglue port: the address-based sharding (codegen_writer, init_h.inja,
+stable_address_shard_bytes) is dropped because shiftglue already pins
+functions to output files through OutputPartition. Only the Windows
+clang/GNU UCRT name fixes in thirdparty/CMakeLists.txt are kept.
+---
+ thirdparty/CMakeLists.txt | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
+index 8c7e67b..a1d30b2 100644
+--- a/thirdparty/CMakeLists.txt
++++ b/thirdparty/CMakeLists.txt
+@@ -303,6 +303,11 @@ endif()
+ 
+ add_subdirectory(sdl3)
+ 
++if(WIN32 AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
++    # The UCRT exports _itoa. SDL uses the non-prefixed spelling.
++    target_compile_definitions(SDL3-static PRIVATE itoa=_itoa)
++endif()
++
+ #=============================================================================
+ # libadrenotools (Android): custom Vulkan drivers such as Mesa Turnip, and the
+ # Adreno GPU's clocks. Its hooks are shared libraries packaged beside the game.
+@@ -387,6 +392,8 @@ if(REXGLUE_ENABLE_TRACY)
+ 
+     if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+         target_link_libraries(TracyClient PUBLIC ws2_32 dbghelp)
++        # The UCRT exports _fileno. Tracy uses the POSIX spelling.
++        target_compile_definitions(TracyClient PRIVATE fileno=_fileno)
+     endif()
+ 
+     target_compile_definitions(TracyClient
+@@ -574,6 +581,10 @@ target_compile_definitions(libavutil PRIVATE ${FFMPEG_COMMON_DEFINES})
+ target_compile_options(libavutil PRIVATE -w)  # Suppress warnings in third-party code
+ if(WIN32)
+     target_link_libraries(libavutil PRIVATE bcrypt)
++    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
++        # The UCRT exports _isatty. FFmpeg uses the POSIX spelling.
++        target_compile_definitions(libavutil PRIVATE isatty=_isatty)
++    endif()
+ endif()
+ 
+ # libavcodec - FFmpeg codec library (depends on libavutil)

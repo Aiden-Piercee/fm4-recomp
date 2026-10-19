@@ -2,8 +2,10 @@
 
 #include "fm4_app.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -24,11 +26,42 @@ REXCVAR_DEFINE_STRING(
     "Directory containing legally obtained FM4 Disc 2 content packages");
 REXCVAR_DEFINE_BOOL(fm4_auto_install_disc2_content, true, "Forza Motorsport 4",
                     "Install validated FM4 Disc 2 content packages at startup");
+REXCVAR_DEFINE_STRING(
+    fm4_dlc_content_root, "", "Forza Motorsport 4",
+    "Directory containing legally obtained FM4 downloadable content packages "
+    "(searched recursively; any FM4 marketplace STFS package is accepted)");
+REXCVAR_DEFINE_BOOL(fm4_auto_install_dlc_content, true, "Forza Motorsport 4",
+                    "Install validated FM4 downloadable content packages at "
+                    "startup");
 
 namespace {
 
 constexpr uint32_t kFm4TitleId = 0x4D530910;
 constexpr std::string_view kDisc2DropDirectory = "disc2-content";
+constexpr std::string_view kDlcDropDirectory = "dlc-content";
+
+// Which filter a source folder uses. Disc 2 folders only accept the four
+// known Disc 2 package names; DLC folders accept any file whose STFS header
+// identifies it as FM4 marketplace content (DLC files have 42-character
+// hash names that differ per pack).
+enum class SourceKind { kDisc2, kDlc };
+
+struct SourceDirectory {
+  std::filesystem::path path;
+  SourceKind kind;
+};
+
+// Cheap pre-check so unrelated files in a DLC folder (readme, .nfo, images)
+// are skipped silently instead of being reported as rejected packages.
+bool HasStfsMagic(const std::filesystem::path &path) {
+  std::ifstream file(path, std::ios::binary);
+  std::array<char, 4> magic{};
+  if (!file.read(magic.data(), magic.size())) {
+    return false;
+  }
+  const std::string_view tag(magic.data(), magic.size());
+  return tag == "LIVE" || tag == "PIRS" || tag == "CON ";
+}
 
 bool IsDisc2PackageName(std::string_view name) {
   return name == "4d53091000000001" || name == "4d53091000000002" ||
@@ -42,18 +75,18 @@ std::string Hex8(uint32_t value) {
   return stream.str();
 }
 
-std::string Disc2EnvironmentRoot() {
+std::string EnvironmentRoot(const char *name) {
 #ifdef _WIN32
   char *value = nullptr;
   size_t length = 0;
-  if (_dupenv_s(&value, &length, "FM4_DISC2_ROOT") != 0 || !value) {
+  if (_dupenv_s(&value, &length, name) != 0 || !value) {
     return {};
   }
   std::string root(value);
   std::free(value);
   return root;
 #else
-  const char *value = std::getenv("FM4_DISC2_ROOT");
+  const char *value = std::getenv(name);
   return value ? value : "";
 #endif
 }
@@ -80,11 +113,11 @@ bool IsInstalled(const std::filesystem::path &user_data_root,
              InstalledHeaderPath(user_data_root, package_path));
 }
 
-std::vector<std::filesystem::path>
+std::vector<SourceDirectory>
 DiscoverSourceDirectories(const std::filesystem::path &app_root,
                           const std::filesystem::path &user_data_root) {
-  std::vector<std::filesystem::path> directories;
-  auto add_directory = [&](std::filesystem::path directory) {
+  std::vector<SourceDirectory> directories;
+  auto add_directory = [&](std::filesystem::path directory, SourceKind kind) {
     if (directory.empty()) {
       return;
     }
@@ -94,32 +127,39 @@ DiscoverSourceDirectories(const std::filesystem::path &app_root,
       return;
     }
     for (const auto &existing : directories) {
-      if (std::filesystem::equivalent(existing, directory, ec)) {
+      if (existing.kind == kind &&
+          std::filesystem::equivalent(existing.path, directory, ec)) {
         return;
       }
       ec.clear();
     }
-    directories.push_back(std::move(directory));
+    directories.push_back({std::move(directory), kind});
   };
 
-  const std::string environment_root = Disc2EnvironmentRoot();
-  if (!environment_root.empty()) {
-    add_directory(environment_root);
+  if (REXCVAR_GET(fm4_auto_install_disc2_content)) {
+    add_directory(EnvironmentRoot("FM4_DISC2_ROOT"), SourceKind::kDisc2);
+    add_directory(std::string(REXCVAR_GET(fm4_disc2_content_root)),
+                  SourceKind::kDisc2);
+    add_directory(app_root / kDisc2DropDirectory, SourceKind::kDisc2);
+    add_directory(user_data_root / kDisc2DropDirectory, SourceKind::kDisc2);
   }
 
-  const std::string configured_root = REXCVAR_GET(fm4_disc2_content_root);
-  if (!configured_root.empty()) {
-    add_directory(configured_root);
+  if (REXCVAR_GET(fm4_auto_install_dlc_content)) {
+    add_directory(EnvironmentRoot("FM4_DLC_ROOT"), SourceKind::kDlc);
+    add_directory(std::string(REXCVAR_GET(fm4_dlc_content_root)),
+                  SourceKind::kDlc);
+    add_directory(app_root / kDlcDropDirectory, SourceKind::kDlc);
+    add_directory(user_data_root / kDlcDropDirectory, SourceKind::kDlc);
   }
-  add_directory(app_root / kDisc2DropDirectory);
-  add_directory(user_data_root / kDisc2DropDirectory);
   return directories;
 }
 
 } // namespace
 
 void Fm4App::OnPostSetup() {
-  if (!REXCVAR_GET(fm4_auto_install_disc2_content) || !runtime() ||
+  if ((!REXCVAR_GET(fm4_auto_install_disc2_content) &&
+       !REXCVAR_GET(fm4_auto_install_dlc_content)) ||
+      !runtime() ||
       !runtime()->kernel_state() ||
       !runtime()->kernel_state()->content_manager()) {
     return;
@@ -127,7 +167,7 @@ void Fm4App::OnPostSetup() {
 
   const uint32_t title_id = runtime()->kernel_state()->title_id();
   if (title_id != kFm4TitleId) {
-    REXLOG_WARN("Skipping FM4 Disc 2 install; running title ID is {:08X}",
+    REXLOG_WARN("Skipping FM4 content install; running title ID is {:08X}",
                 title_id);
     return;
   }
@@ -140,10 +180,15 @@ void Fm4App::OnPostSetup() {
   size_t existing_count = 0;
   size_t rejected_count = 0;
 
-  for (const auto &source_directory : source_directories) {
+  for (const auto &source : source_directories) {
+    const auto &source_directory = source.path;
+    const bool is_dlc = source.kind == SourceKind::kDlc;
+    const char *kind_label = is_dlc ? "DLC" : "Disc 2";
     if (!std::filesystem::is_directory(source_directory)) {
       continue;
     }
+    REXLOG_INFO("Scanning FM4 {} folder: {}", kind_label,
+                source_directory.string());
 
     std::error_code iter_ec;
     std::filesystem::recursive_directory_iterator iterator(
@@ -153,8 +198,11 @@ void Fm4App::OnPostSetup() {
     while (!iter_ec && iterator != end) {
       const auto entry = *iterator;
       iterator.increment(iter_ec);
-      if (!entry.is_regular_file() ||
-          !IsDisc2PackageName(entry.path().filename().string())) {
+      if (!entry.is_regular_file()) {
+        continue;
+      }
+      if (is_dlc ? !HasStfsMagic(entry.path())
+                 : !IsDisc2PackageName(entry.path().filename().string())) {
         continue;
       }
 
@@ -166,15 +214,19 @@ void Fm4App::OnPostSetup() {
       if (canonical_ec) {
         package_key = std::filesystem::absolute(package_path).string();
       }
-      if (!seen_packages.insert(package_key).second) {
+      // Also de-duplicate by file name: the install location is keyed by it,
+      // so the same pack found in two folders must only be installed once.
+      if (!seen_packages.insert(package_key).second ||
+          !seen_packages.insert("name:" + package_path.filename().string())
+               .second) {
         continue;
       }
 
       const auto header =
           rex::filesystem::StfsContainerDevice::ReadPackageHeader(package_path);
       if (!header) {
-        REXLOG_WARN("Rejecting FM4 Disc 2 package with invalid STFS header: {}",
-                    package_path.string());
+        REXLOG_WARN("Rejecting FM4 {} package with invalid STFS header: {}",
+                    kind_label, package_path.string());
         ++rejected_count;
         continue;
       }
@@ -185,42 +237,65 @@ void Fm4App::OnPostSetup() {
           header->metadata.execution_info.title_id;
       if (content_type != rex::system::XContentType::kMarketplaceContent ||
           package_title_id != kFm4TitleId) {
-        REXLOG_WARN("Rejecting Disc 2 package {} (type {:08X}, title {:08X})",
-                    package_path.filename().string(),
+        REXLOG_WARN("Rejecting {} package {} (type {:08X}, title {:08X})",
+                    kind_label, package_path.filename().string(),
                     static_cast<uint32_t>(content_type), package_title_id);
         ++rejected_count;
         continue;
       }
 
       if (IsInstalled(user_data_root, package_path)) {
-        REXLOG_INFO("FM4 Disc 2 package already installed: {}",
+        REXLOG_INFO("FM4 {} package already installed: {}", kind_label,
                     package_path.filename().string());
         ++existing_count;
         continue;
       }
 
-      REXLOG_INFO("Installing FM4 Disc 2 package: {}", package_path.string());
+      REXLOG_INFO("Installing FM4 {} package: {}", kind_label,
+                  package_path.string());
       const auto result =
           runtime()->kernel_state()->content_manager()->InstallContent(
               package_path);
       if (result == 0) {
         ++installed_count;
-        REXLOG_INFO("Installed FM4 Disc 2 package: {}",
+        REXLOG_INFO("Installed FM4 {} package: {}", kind_label,
                     package_path.filename().string());
       } else {
         ++rejected_count;
-        REXLOG_WARN("Failed to install FM4 Disc 2 package {}: {:08X}",
-                    package_path.filename().string(),
+        REXLOG_WARN("Failed to install FM4 {} package {}: {:08X}",
+                    kind_label, package_path.filename().string(),
                     static_cast<uint32_t>(result));
       }
     }
     if (iter_ec) {
-      REXLOG_WARN("Could not finish scanning FM4 Disc 2 folder {}: {}",
-                  source_directory.string(), iter_ec.message());
+      REXLOG_WARN("Could not finish scanning FM4 {} folder {}: {}",
+                  kind_label, source_directory.string(), iter_ec.message());
     }
   }
 
   REXLOG_INFO(
-      "FM4 Disc 2 scan complete: {} installed, {} already present, {} rejected",
+      "FM4 content scan complete: {} installed, {} already present, {} "
+      "rejected",
       installed_count, existing_count, rejected_count);
+}
+
+// Engine temperature / oil pressure readout above the speedometer (overheat.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateOverheatHud(rex::ui::ImGuiDrawer* drawer);
+
+// OPTIONS & MODS main-menu overlay (mods_menu.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateModsOverlay(
+    rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user_root);
+
+// Rear rim readout in the upgrade shop (staggered_wheels.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateStaggerHud(rex::ui::ImGuiDrawer* drawer);
+
+// Rim Style picker overlay (rim_picker.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateRimPicker(rex::ui::ImGuiDrawer* drawer,
+                                                      const std::filesystem::path& user_root);
+
+void Fm4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+  stagger_hud_ = CreateStaggerHud(drawer);
+  if (runtime()) rim_picker_ = CreateRimPicker(drawer, runtime()->user_data_root());
+  overheat_hud_ = CreateOverheatHud(drawer);
+  if (runtime()) mods_overlay_ = CreateModsOverlay(drawer, runtime()->user_data_root());
 }

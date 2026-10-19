@@ -24,7 +24,13 @@ The following data is useful to a shared Xbox 360 recompilation corpus:
   resolved as signed integer data with exponent bias and then sampled by scene
   material shaders.
 - The validated FM4 correctness profile and negative results for automatic
-  readback, 2x internal scaling, and vblank overrides.
+  readback, 2x internal scaling on the ROV path, and vblank overrides.
+- Post-launch marketplace DLC: FM4 accepts STFS `LIVE` packages of content type
+  2 for title `4D530910` with 42-character file names, installed through the
+  content manager like Disc 2.
+- Native-executor measurements: in FM4 races the largest GPU cost is EDRAM
+  ownership transfers, which single-pass stencil-reference transfers roughly
+  halve at 2x (`docs/NATIVE_RENDERER.md`).
 
 The corpus should store metadata, hashes, addresses, traces, and test outcomes.
 It must not store game executables, extracted assets, user profiles, or Disc 2

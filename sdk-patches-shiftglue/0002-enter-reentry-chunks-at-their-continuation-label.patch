@@ -1,0 +1,46 @@
+From a4b0370f12863f2e91131424a3746d3bfd4c5eac Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Mon, 10 Aug 2026 14:26:12 +0300
+Subject: [PATCH 02/11] enter reentry chunks at their continuation label
+
+shiftglue port: the entry jump is emitted after shiftglue's existing
+resume-address dispatch switch.
+---
+ src/codegen/function_graph.cpp | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/codegen/function_graph.cpp b/src/codegen/function_graph.cpp
+index b0df537..dee62cf 100644
+--- a/src/codegen/function_graph.cpp
++++ b/src/codegen/function_graph.cpp
+@@ -506,6 +506,19 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+     }
+   }
+ 
++  // A reentry chunk can reach blocks before its configured entry. Blocks are
++  // emitted in address order, so jump over those blocks on initial entry.
++  const bool hasEarlierBlock =
++      std::any_of(blocks().begin(), blocks().end(),
++                  [&](const Block& block) { return block.base < base(); });
++  const bool containsEntry =
++      std::any_of(blocks().begin(), blocks().end(),
++                  [&](const Block& block) { return block.contains(base()); });
++  const bool needsEntryJump = hasEarlierBlock && containsEntry;
++  if (needsEntryJump) {
++    labels.emplace(base());
++  }
++
+   // --- Function name ---
+   std::string name;
+   if (base() == ctx.entryPoint) {
+@@ -547,6 +560,10 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
+     emit_println(body, "\tctx.dispatch_address = 0;");
+   }
+ 
++  if (needsEntryJump) {
++    emit_println(body, "\tgoto loc_{:X};", base());
++  }
++
+   ppc_insn insn;
+   std::unordered_set<size_t> emittedLabels;
+ 

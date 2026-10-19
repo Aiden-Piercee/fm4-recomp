@@ -13,6 +13,12 @@ unchanged. See [Performance options](PERFORMANCE.md).
   hitch diagnostics, placed texture heaps and a precise guest vblank timer.
 - `Launch FM4 (Performance 1440p).bat`: an experimental 2x profile that held
   60 FPS in the tested races.
+- Installs owned FM4 post-launch marketplace DLC from a DLC folder
+  (`-DlcContentRoot`, `FM4_DLC_ROOT`, or the `fm4_dlc_content_root` cvar).
+- New launchers: `Build FM4.bat`, `Launch FM4 (Fast Readback).bat`, and file
+  and model trace launchers. The Disc 2 installer is now `lfm4d2.bat`.
+- Car port tools (`tools/dlc`) that build FM4 DLC packages from other Forza
+  titles. Experimental.
 
 ## Windows x64 player download
 
