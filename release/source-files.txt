@@ -68,5 +68,92 @@ validation/runs/.gitkeep
 Launch FM4 Player.bat
 docs/PLAYING.md
 tools/New-BinaryRelease.ps1
-validation/acceptance.toml
-validation/runs/.gitkeep
+AGENT_HANDOVER.md
+Build FM4.bat
+FM2_TO_FM4_STATUS_2026-10-11.md
+FM3-to-FM4-AGENT-HANDOVER.md
+GLOBAL_TODO.md
+Launch FM4 (20 cars).bat
+Launch FM4 (20 cars, minimal).bat
+Launch FM4 (20 cars, skip unified).bat
+Launch FM4 (24 cars).bat
+Launch FM4 (28 cars).bat
+Launch FM4 (32 cars).bat
+Launch FM4 (Faults test).bat
+Launch FM4 (File Trace).bat
+Launch FM4 (Model Trace).bat
+Launch FM4 (Multi-car Trace).bat
+Launch FM4 (Overheat test).bat
+Launch FM4 (pick car count).bat
+Launch FM4 (test T1).bat
+Launch FM4 (test T2).bat
+Launch FM4 (test T3).bat
+Launch FM4copy.bat
+Quick Build FM4.bat
+Test A - native 1x.bat
+Test B - native 2x no deferred.bat
+docs/CAR-PORT-HANDOFF.md
+docs/CARBIN-GARAGE.md
+docs/HANDOFF-port-pipeline-2026-10-18.md
+fm4_cars.cfg.example
+sdk-patches-shiftglue/0001-follow-parent-control-flow-from-reentry-chunks.patch
+sdk-patches-shiftglue/0002-enter-reentry-chunks-at-their-continuation-label.patch
+sdk-patches-shiftglue/0003-add-cooperative-guest-checkpoint-boundary.patch
+sdk-patches-shiftglue/0004-Generate-stable-address-based-recompilation-shards.patch
+sdk-patches-shiftglue/0005-Resolve-parent-owned-branch-labels-locally.patch
+sdk-patches-shiftglue/0006-Batch-initial-function-registration.patch
+sdk-patches-shiftglue/0007-Add-lightweight-guest-FPS-overlay-statistics.patch
+sdk-patches-shiftglue/0008-Mount-writable-guest-cache-devices.patch
+sdk-patches-shiftglue/0009-Add-a-guest-vblank-frequency-override.patch
+sdk-patches-shiftglue/0010-Use-a-high-resolution-timer-for-sub-quantum-sleeps.patch
+sdk-patches-shiftglue/0011-fix-build-support-current-Windows-toolchains.patch
+sdk-patches-shiftglue/README.md
+tools/Build-Quick.ps1
+tools/audio/make_upgrade_audio_pack.py
+tools/audio/vw_fox_test.json
+tools/dlc/ai_drivers_data.py
+tools/dlc/batch_fm3.py
+tools/dlc/build_fzlzx.sh
+tools/dlc/carbin.py
+tools/dlc/carbin_fm2.py
+tools/dlc/carbin_fm2_wheel.py
+tools/dlc/carbin_fm3.py
+tools/dlc/dlc_inspect.py
+tools/dlc/exhaust_parts_miata_test.json
+tools/dlc/fh3_grub.py
+tools/dlc/fh3_logo.png
+tools/dlc/fh6_logo.png
+tools/dlc/fh6_logo_official.png
+tools/dlc/fh_logo.png
+tools/dlc/fill_morph.py
+tools/dlc/fm23_logo.png
+tools/dlc/fm2_logo.png
+tools/dlc/fm2_port/README.md
+tools/dlc/fm2_port/__init__.py
+tools/dlc/fm2_port/donor.py
+tools/dlc/fm2_port/inventory.py
+tools/dlc/fm2_port/port_fm2_car.py
+tools/dlc/fm3vert.py
+tools/dlc/forza_str.py
+tools/dlc/forza_str_write.py
+tools/dlc/forza_zip.py
+tools/dlc/fzlzx.c
+tools/dlc/make_ai_drivers_pack.py
+tools/dlc/make_damage_pack.py
+tools/dlc/make_dealer_thumbs_pack.py
+tools/dlc/make_event_test_pack.py
+tools/dlc/make_exhaust_parts_pack.py
+tools/dlc/make_fh_base_pack.py
+tools/dlc/make_fh_wheels_pack.py
+tools/dlc/make_fm2_base_pack.py
+tools/dlc/make_fm2_wheels_pack.py
+tools/dlc/make_fm3_base_pack.py
+tools/dlc/make_grid32_pack.py
+tools/dlc/port_dlc_car.py
+tools/dlc/stfs_extract.py
+tools/dlc/xex_to_pe.py
+tools/re/rtti_map.py
+tools/re/show_func.sh
+tools/ui/add_buycar_camera.py
+tools/ui/add_upgrade_brakes_camera.py
+tools/ui/add_upgrade_exhaust_camera.py

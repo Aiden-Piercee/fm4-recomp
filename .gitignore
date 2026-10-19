@@ -23,3 +23,6 @@ dlc-content/
 fm4/fm4_manifest.local.toml
 .local/
 release-out/
+__pycache__/
+*.pyc
+*.so
