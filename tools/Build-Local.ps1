@@ -98,11 +98,36 @@ $sdkPatches = @($sdkPatchSources | ForEach-Object {
     $normalizedPatch
 })
 
+# The exact patch files the last build applied, kept so the next build can
+# reverse what is really in the checkout even after a branch switch, an
+# edited patch or new patches stacked on the series.
+$sdkPatchAppliedRoot = Join-Path $localRoot "sdk-patches-applied"
 $sdkDirty = @(& $git -C $sdkSource status --porcelain --untracked-files=no)
 if ($LASTEXITCODE -ne 0) {
     throw "git status failed for the SDK checkout."
 }
+if ($sdkDirty.Count -ne 0 -and (Test-Path -LiteralPath $sdkPatchAppliedRoot -PathType Container)) {
+    $appliedPatches = @(Get-ChildItem -LiteralPath $sdkPatchAppliedRoot -Filter "*.patch" -File |
+        Sort-Object Name -Descending)
+    foreach ($patch in $appliedPatches) {
+        & $git -C $sdkSource apply --reverse --check $patch.FullName 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "SDK checkout does not match the patches the last build applied ($($patch.Name) in $sdkPatchAppliedRoot does not reverse). Refusing a non-pinned toolchain build."
+        }
+        Invoke-CheckedNative -FilePath $git -ArgumentList @("apply", "--reverse", $patch.FullName) -WorkingDirectory $sdkSource
+        Write-Host "Reversed SDK patch the last build applied: $($patch.Name)"
+    }
+    $sdkDirty = @(& $git -C $sdkSource status --porcelain --untracked-files=no)
+    if ($LASTEXITCODE -ne 0 -or $sdkDirty.Count -ne 0) {
+        throw "SDK checkout has tracked modifications beyond the patches the last build applied. Refusing a non-pinned toolchain build."
+    }
+}
+if (Test-Path -LiteralPath $sdkPatchAppliedRoot) {
+    Remove-Item -LiteralPath $sdkPatchAppliedRoot -Recurse -Force
+}
 if ($sdkDirty.Count -ne 0) {
+    # No record of the last build's patches (built before the record existed):
+    # reverse the current series, skipping patches that were not applied.
     if ($sdkPatches.Count -eq 0) {
         throw "SDK checkout has tracked modifications. Refusing a non-pinned toolchain build."
     }
@@ -139,8 +164,10 @@ $submoduleStatus = @(& $git -C $sdkSource submodule status --recursive)
 if ($LASTEXITCODE -ne 0 -or @($submoduleStatus | Where-Object { $_ -match "^[-+]" }).Count -ne 0) {
     throw "SDK submodules are missing or do not match the pinned SDK commit."
 }
+[IO.Directory]::CreateDirectory($sdkPatchAppliedRoot) | Out-Null
 foreach ($patch in $sdkPatches) {
     Invoke-CheckedNative -FilePath $git -ArgumentList @("apply", "--whitespace=nowarn", $patch) -WorkingDirectory $sdkSource
+    Copy-Item -LiteralPath $patch -Destination (Join-Path $sdkPatchAppliedRoot ([IO.Path]::GetFileName($patch)))
     Write-Host "Applied SDK patch: $([IO.Path]::GetFileName($patch))"
 }
 # The native executor's shaders (sdk-patches/0002) are committed as HLSL only;
