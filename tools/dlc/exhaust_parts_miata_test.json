@@ -1,0 +1,5 @@
+{
+  "_comment": "Stage 2 test, MAZ_Miata_94 (car 1110, engine 179). Sport (179002): stock tips hidden, kit-C exhaust shown. Race (179003): both exhaust sections hidden (works with any rear bumper). Stock 179000 unchanged.",
+  "strings": {"9001": "-exhaustRa,exhaustRc", "9002": "-exhaustRa,-exhaustRc"},
+  "exhaust": {"179002": 9001, "179003": 9002}
+}

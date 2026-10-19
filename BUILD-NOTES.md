@@ -67,3 +67,37 @@ update the main-image dispatch table.
 When the manifest's dynamic-module set changes, also rebuild
 `generated/default/module_registry.cpp`. Relinking with a stale registry can
 silently omit a facade DLL and fail only when the game first loads that module.
+
+## SDK patches
+
+`tools/Build-Local.ps1` applies every `sdk-patches/*.patch` (in name order) on
+top of the pinned SDK commit. The builder still refuses an SDK checkout with
+any other modification. To iterate on the GPU plugin without regenerating FM4:
+
+```powershell
+pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOnly
+```
+
+`0001-d3d12-deferred-readback-sync.patch` adds
+`d3d12_readback_resolve_deferred_sync` (default off). With full host-copy
+readback it records each resolve's copy into guest RAM and waits for the GPU
+once, at the next guest-visible sync point (scratch-register or memory
+writeback, `EVENT_WRITE_SHD`, interrupt, swap, or command-processor stall),
+instead of draining the queue after every resolve. Enable it per run with
+`Run-Local.ps1 -DeferredReadbackSync` or `Launch FM4 (Fast Readback).bat`, and
+compare the `readback stats/300f` lines in `fm4.log` (`deferred` vs `sync
+waits` and `ms waiting`) against the validated preset.
+
+`0002-native-executor.patch` adds the opt-in native D3D12 render target path
+(`render_target_path_d3d12 = "native"`), ported from shiftglue-sdk, plus the
+`native_executor_gpu_profile`, `native_executor_stencil_ref_transfers`,
+`frame_time_stats_window` and `deferred_readback_flush_mask` cvars. Its
+extended resolve shader is compiled at first use with `D3DCompiler_47.dll`.
+See [Native D3D12 renderer](docs/NATIVE_RENDERER.md) and the attribution in
+`THIRD_PARTY_NOTICES.md`.
+
+`sdk-patches-shiftglue/` is a separate, untested series that carries FM4's SDK
+commits onto shiftglue-sdk. The builder does not apply it; see its README.
+
+`-Jobs` now defaults to automatic: one job per logical processor, capped at
+about 3 GB of free RAM per job.

@@ -1,5 +1,20 @@
 # Release notes
 
+## Unreleased (in development)
+
+Not yet part of a release; see [Current status](STATUS.md) for what has been
+tested.
+
+- Installs owned FM4 post-launch marketplace DLC from a DLC folder
+  (`-DlcContentRoot`, `FM4_DLC_ROOT`, or the `fm4_dlc_content_root` cvar).
+- SDK patches applied by the builder: deferred resolve readback sync (0001,
+  off by default) and an opt-in native D3D12 render path (0002, ported from
+  shiftglue-sdk, BSD-3-Clause; see `THIRD_PARTY_NOTICES.md`).
+- New launchers: `Build FM4.bat`, `Launch FM4 (Fast Readback).bat`, and file
+  and model trace launchers. The Disc 2 installer is now `lfm4d2.bat`.
+- Car port tools (`tools/dlc`) that build FM4 DLC packages from other Forza
+  titles. Experimental.
+
 ## v0.1.0-alpha.1
 
 This first experimental source release provides a builder-first path for

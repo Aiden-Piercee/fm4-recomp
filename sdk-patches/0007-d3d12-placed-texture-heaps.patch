@@ -1,0 +1,345 @@
+From 3ff89174f57cea6ca1c6713214eed79ed53d6f4c Mon Sep 17 00:00:00 2001
+From: perf <perf@local>
+Date: Fri, 16 Oct 2026 03:39:25 +0000
+Subject: [PATCH] perf(d3d12): optional placed texture heaps to avoid
+ per-texture allocation stalls
+
+---
+ include/rex/graphics/d3d12/texture_cache.h    |  32 +++
+ include/rex/graphics/pipeline/texture/cache.h |   5 +
+ src/graphics/d3d12/command_processor.cpp      |   4 +-
+ src/graphics/d3d12/texture_cache.cpp          | 183 +++++++++++++++++-
+ 4 files changed, 218 insertions(+), 6 deletions(-)
+
+diff --git a/include/rex/graphics/d3d12/texture_cache.h b/include/rex/graphics/d3d12/texture_cache.h
+index 4d845c7..c5ee776 100644
+--- a/include/rex/graphics/d3d12/texture_cache.h
++++ b/include/rex/graphics/d3d12/texture_cache.h
+@@ -13,6 +13,7 @@
+ 
+ #include <array>
+ #include <functional>
++#include <map>
+ #include <memory>
+ #include <unordered_map>
+ #include <utility>
+@@ -253,6 +254,14 @@ class D3D12TextureCache final : public TextureCache {
+ 
+     ID3D12Resource* resource() const { return resource_.Get(); }
+ 
++    // Set when the resource was placed in one of the texture cache's heaps, so
++    // the range is returned to the heap when the texture is destroyed.
++    void SetPlacedAllocation(uint32_t heap_index, uint64_t offset, uint64_t size) {
++      placed_heap_index_ = heap_index;
++      placed_offset_ = offset;
++      placed_size_ = size;
++    }
++
+     D3D12_RESOURCE_STATES SetResourceState(D3D12_RESOURCE_STATES new_state) {
+       D3D12_RESOURCE_STATES old_state = resource_state_;
+       resource_state_ = new_state;
+@@ -272,6 +281,9 @@ class D3D12TextureCache final : public TextureCache {
+     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
+     D3D12_RESOURCE_STATES resource_state_;
+     std::unique_ptr<D3D12Texture> texture_3d_as_2d_;
++    uint32_t placed_heap_index_ = UINT32_MAX;
++    uint64_t placed_offset_ = 0;
++    uint64_t placed_size_ = 0;
+ 
+     // For bindful - indices in the non-shader-visible descriptor cache for
+     // copying to the shader-visible heap (much faster than recreating, which,
+@@ -459,6 +471,26 @@ class D3D12TextureCache final : public TextureCache {
+ 
+   Microsoft::WRL::ComPtr<ID3D12RootSignature> load_root_signature_;
+   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount> load_pipelines_;
++
++  // Placed texture heaps (d3d12_texture_placed_heaps). Creating a committed
++  // resource allocates driver memory every time (about 0.5 ms each on some
++  // drivers), which stalls the command processor when the game streams many
++  // textures in one frame. Placing them in big pre-made heaps avoids that.
++  struct TextureHeap {
++    Microsoft::WRL::ComPtr<ID3D12Heap> heap;
++    // Free ranges, offset -> size, coalesced.
++    std::map<uint64_t, uint64_t> free_ranges;
++  };
++  bool CreateTextureHeap();
++  bool AllocateTextureHeapRange(uint64_t size, uint64_t alignment, uint32_t& heap_index_out,
++                                uint64_t& offset_out);
++  void FreeTextureHeapRange(uint32_t heap_index, uint64_t offset, uint64_t size);
++  ID3D12Resource* CreatePlacedTexture(D3D12_RESOURCE_DESC& desc,
++                                      D3D12_RESOURCE_STATES initial_state,
++                                      uint32_t& heap_index_out, uint64_t& offset_out,
++                                      uint64_t& size_out);
++  std::vector<TextureHeap> texture_heaps_;
++  uint64_t texture_heap_size_ = 0;
+   // Load pipelines for resolution-scaled resolve targets.
+   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount> load_pipelines_scaled_;
+ 
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+index 6c46e75..28d6b04 100644
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -145,6 +145,8 @@ class TextureCache {
+     uint32_t loaded = 0;
+     uint32_t scaled_loaded = 0;
+     uint32_t evicted = 0;
++    uint32_t placed = 0;
++    uint32_t heaps_created = 0;
+   };
+   void SetHitchTiming(bool enable) {
+     hitch_timing_ = enable;
+@@ -156,6 +158,9 @@ class TextureCache {
+   }
+ 
+  protected:
++  // Null unless hitch timing is on for this frame.
++  HitchStats* hitch_stats_if_timing() { return hitch_timing_ ? &hitch_stats_ : nullptr; }
++
+   struct TextureKey {
+     // Dimensions minus 1 are stored similarly to how they're stored in fetch
+     // constants so fewer bits can be used, while the maximum size (8192 for 2D)
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index fad0f23..c392911 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -2395,11 +2395,11 @@ std::string D3D12CommandProcessor::FrameHitchDetails() const {
+     if (tex.created || tex.loaded || tex.evicted) {
+       details += fmt::format(
+           " | tex: create={:.1f}ms/{} upload={:.1f}ms/{:.1f}MB scaled_commit={:.1f}ms "
+-          "load={:.1f}ms/{} ({} scaled) evicted={} cache={}MB",
++          "load={:.1f}ms/{} ({} scaled) evicted={} cache={}MB placed={} new_heaps={}",
+           tex.create_us / 1000.0, tex.created, tex.upload_us / 1000.0,
+           tex.upload_bytes / (1024.0 * 1024.0), tex.scaled_commit_us / 1000.0,
+           tex.load_us / 1000.0, tex.loaded, tex.scaled_loaded, tex.evicted,
+-          texture_cache_->textures_total_host_memory_usage_mb());
++          texture_cache_->textures_total_host_memory_usage_mb(), tex.placed, tex.heaps_created);
+     }
+   }
+   return details;
+diff --git a/src/graphics/d3d12/texture_cache.cpp b/src/graphics/d3d12/texture_cache.cpp
+index 2be0e8e..84ea29e 100644
+--- a/src/graphics/d3d12/texture_cache.cpp
++++ b/src/graphics/d3d12/texture_cache.cpp
+@@ -18,6 +18,7 @@
+ #include <utility>
+ 
+ #include <rex/assert.h>
++#include <rex/cvar.h>
+ #include <rex/dbg.h>
+ #include <rex/graphics/d3d12/command_processor.h>
+ #include <rex/graphics/d3d12/shared_memory.h>
+@@ -32,6 +33,24 @@
+ #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
+ #include <rex/ui/d3d12/d3d12_util.h>
+ 
++REXCVAR_DEFINE_BOOL(d3d12_texture_placed_heaps, false, "GPU",
++                    "Place textures in large pre-made heaps instead of creating a committed "
++                    "resource for each one. Removes driver allocation stalls when the game "
++                    "streams many textures at once.")
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++REXCVAR_DEFINE_INT32(d3d12_texture_heap_size_mb, 64, "GPU",
++                     "Size of each placed texture heap (MB). Textures larger than half of this "
++                     "still get their own committed resource.")
++    .range(16, 1024)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
++REXCVAR_DEFINE_INT32(d3d12_texture_heap_prealloc_mb, 0, "GPU",
++                     "Placed texture heap memory to create at startup (MB), so heap creation "
++                     "does not happen during gameplay.")
++    .range(0, 16384)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ namespace rex::graphics::d3d12 {
+ 
+ // Generated with `xb buildshaders`.
+@@ -391,6 +410,22 @@ bool D3D12TextureCache::Initialize() {
+   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+   ID3D12Device* device = provider.GetDevice();
+ 
++  texture_heaps_.clear();
++  texture_heap_size_ = 0;
++  if (REXCVAR_GET(d3d12_texture_placed_heaps)) {
++    texture_heap_size_ = uint64_t(REXCVAR_GET(d3d12_texture_heap_size_mb)) << 20;
++    uint64_t prealloc_bytes = uint64_t(REXCVAR_GET(d3d12_texture_heap_prealloc_mb)) << 20;
++    uint32_t prealloc_heaps =
++        uint32_t((prealloc_bytes + texture_heap_size_ - 1) / texture_heap_size_);
++    for (uint32_t i = 0; i < prealloc_heaps; ++i) {
++      if (!CreateTextureHeap()) {
++        break;
++      }
++    }
++    REXGPU_INFO("Placed texture heaps enabled: {} MB heaps, {} created at startup",
++                texture_heap_size_ >> 20, texture_heaps_.size());
++  }
++
+   if (IsDrawResolutionScaled()) {
+     // Buffers not used yet - no need aliasing barriers to change ownership of
+     // gigabytes between even and odd buffers.
+@@ -1427,6 +1462,12 @@ D3D12TextureCache::D3D12Texture::~D3D12Texture() {
+   for (const auto& descriptor_pair : srv_descriptors_) {
+     d3d12_texture_cache.ReleaseTextureDescriptor(descriptor_pair.second);
+   }
++  if (placed_heap_index_ != UINT32_MAX) {
++    // Textures are only destroyed once the GPU has stopped using them, so the
++    // range can be reused right away.
++    resource_.Reset();
++    d3d12_texture_cache.FreeTextureHeapRange(placed_heap_index_, placed_offset_, placed_size_);
++  }
+ }
+ 
+ bool D3D12TextureCache::IsDecompressionNeeded(xenos::TextureFormat format, uint32_t width,
+@@ -1549,12 +1590,146 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
+   // Assuming untiling will be the next operation.
+   D3D12_RESOURCE_STATES resource_state = D3D12_RESOURCE_STATE_COPY_DEST;
+   Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+-  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
+-                                             provider.GetHeapFlagCreateNotZeroed(), &desc,
+-                                             resource_state, nullptr, IID_PPV_ARGS(&resource)))) {
++  uint32_t placed_heap_index = UINT32_MAX;
++  uint64_t placed_offset = 0, placed_size = 0;
++  if (texture_heap_size_) {
++    ID3D12Resource* placed_resource =
++        CreatePlacedTexture(desc, resource_state, placed_heap_index, placed_offset, placed_size);
++    if (placed_resource) {
++      // Take ownership of the reference returned by CreatePlacedTexture.
++      resource.Attach(placed_resource);
++    }
++  }
++  if (!resource) {
++    desc.Alignment = 0;
++    if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
++                                               provider.GetHeapFlagCreateNotZeroed(), &desc,
++                                               resource_state, nullptr,
++                                               IID_PPV_ARGS(&resource)))) {
++      return nullptr;
++    }
++  }
++  auto texture = std::make_unique<D3D12Texture>(*this, key, resource.Get(), resource_state);
++  if (placed_heap_index != UINT32_MAX) {
++    texture->SetPlacedAllocation(placed_heap_index, placed_offset, placed_size);
++  }
++  return std::unique_ptr<Texture>(texture.release());
++}
++
++bool D3D12TextureCache::CreateTextureHeap() {
++  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
++  ID3D12Device* device = provider.GetDevice();
++  D3D12_HEAP_DESC heap_desc = {};
++  heap_desc.SizeInBytes = texture_heap_size_;
++  heap_desc.Properties = ui::d3d12::util::kHeapPropertiesDefault;
++  heap_desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
++  heap_desc.Flags =
++      D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES | provider.GetHeapFlagCreateNotZeroed();
++  TextureHeap texture_heap;
++  if (FAILED(device->CreateHeap(&heap_desc, IID_PPV_ARGS(&texture_heap.heap)))) {
++    REXGPU_WARN("Failed to create a {} MB placed texture heap", texture_heap_size_ >> 20);
++    return false;
++  }
++  texture_heap.free_ranges.emplace(uint64_t(0), texture_heap_size_);
++  texture_heaps_.push_back(std::move(texture_heap));
++  if (HitchStats* stats = hitch_stats_if_timing()) {
++    ++stats->heaps_created;
++  }
++  return true;
++}
++
++bool D3D12TextureCache::AllocateTextureHeapRange(uint64_t size, uint64_t alignment,
++                                                 uint32_t& heap_index_out,
++                                                 uint64_t& offset_out) {
++  for (uint32_t heap_index = 0; heap_index < uint32_t(texture_heaps_.size()); ++heap_index) {
++    std::map<uint64_t, uint64_t>& free_ranges = texture_heaps_[heap_index].free_ranges;
++    for (auto it = free_ranges.begin(); it != free_ranges.end(); ++it) {
++      uint64_t range_start = it->first;
++      uint64_t range_end = it->first + it->second;
++      uint64_t aligned_start = (range_start + alignment - 1) / alignment * alignment;
++      if (aligned_start + size > range_end) {
++        continue;
++      }
++      free_ranges.erase(it);
++      if (aligned_start > range_start) {
++        free_ranges.emplace(range_start, aligned_start - range_start);
++      }
++      if (aligned_start + size < range_end) {
++        free_ranges.emplace(aligned_start + size, range_end - (aligned_start + size));
++      }
++      heap_index_out = heap_index;
++      offset_out = aligned_start;
++      return true;
++    }
++  }
++  return false;
++}
++
++void D3D12TextureCache::FreeTextureHeapRange(uint32_t heap_index, uint64_t offset, uint64_t size) {
++  if (heap_index >= texture_heaps_.size() || !size) {
++    return;
++  }
++  std::map<uint64_t, uint64_t>& free_ranges = texture_heaps_[heap_index].free_ranges;
++  auto it = free_ranges.emplace(offset, size).first;
++  // Merge with the next range.
++  auto next_it = std::next(it);
++  if (next_it != free_ranges.end() && it->first + it->second == next_it->first) {
++    it->second += next_it->second;
++    free_ranges.erase(next_it);
++  }
++  // Merge with the previous range.
++  if (it != free_ranges.begin()) {
++    auto prev_it = std::prev(it);
++    if (prev_it->first + prev_it->second == it->first) {
++      prev_it->second += it->second;
++      free_ranges.erase(it);
++    }
++  }
++}
++
++ID3D12Resource* D3D12TextureCache::CreatePlacedTexture(D3D12_RESOURCE_DESC& desc,
++                                                       D3D12_RESOURCE_STATES initial_state,
++                                                       uint32_t& heap_index_out,
++                                                       uint64_t& offset_out, uint64_t& size_out) {
++  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
++  // Try the 4 KB small-resource alignment first, as the driver allows it only
++  // for small textures, and fall back to the default 64 KB.
++  desc.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT;
++  D3D12_RESOURCE_ALLOCATION_INFO allocation_info = device->GetResourceAllocationInfo(0, 1, &desc);
++  if (allocation_info.SizeInBytes == UINT64_MAX ||
++      allocation_info.Alignment != D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT) {
++    desc.Alignment = 0;
++    allocation_info = device->GetResourceAllocationInfo(0, 1, &desc);
++  }
++  if (allocation_info.SizeInBytes == UINT64_MAX ||
++      allocation_info.SizeInBytes > texture_heap_size_ / 2) {
+     return nullptr;
+   }
+-  return std::unique_ptr<Texture>(new D3D12Texture(*this, key, resource.Get(), resource_state));
++  uint64_t size = allocation_info.SizeInBytes;
++  uint64_t alignment = std::max(uint64_t(allocation_info.Alignment),
++                                uint64_t(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT));
++  uint32_t heap_index;
++  uint64_t offset;
++  if (!AllocateTextureHeapRange(size, alignment, heap_index, offset)) {
++    if (!CreateTextureHeap() || !AllocateTextureHeapRange(size, alignment, heap_index, offset)) {
++      return nullptr;
++    }
++  }
++  ID3D12Resource* resource = nullptr;
++  if (FAILED(device->CreatePlacedResource(texture_heaps_[heap_index].heap.Get(), offset, &desc,
++                                          initial_state, nullptr, IID_PPV_ARGS(&resource)))) {
++    FreeTextureHeapRange(heap_index, offset, size);
++    return nullptr;
++  }
++  // The memory may have belonged to a destroyed texture.
++  command_processor_.PushAliasingBarrier(nullptr, resource);
++  if (HitchStats* stats = hitch_stats_if_timing()) {
++    ++stats->placed;
++  }
++  heap_index_out = heap_index;
++  offset_out = offset;
++  size_out = size;
++  return resource;
+ }
+ 
+ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, bool load_base,
+-- 
+2.34.1
+

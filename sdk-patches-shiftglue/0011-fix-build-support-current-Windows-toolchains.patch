@@ -1,0 +1,47 @@
+From d6219f570399d263dfe5696e9b7bd48b99af4618 Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Thu, 3 Sep 2026 04:24:01 +0300
+Subject: [PATCH 11/11] fix(build): support current Windows toolchains
+
+shiftglue port: shiftglue already defines the clock_cast fallback for
+libc++; the C++20 feature-test condition is added to that guard. The
+libmspack path change applies unchanged.
+---
+ include/rex/chrono/chrono.h | 7 +++++--
+ thirdparty/CMakeLists.txt   | 4 +++-
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/include/rex/chrono/chrono.h b/include/rex/chrono/chrono.h
+index c710577..4947c38 100644
+--- a/include/rex/chrono/chrono.h
++++ b/include/rex/chrono/chrono.h
+@@ -116,9 +116,12 @@ using XSystemClock = detail::NtSystemClock<detail::Domain::Guest>;
+ 
+ namespace std::chrono {
+ 
+-#if defined(__APPLE__) || defined(_LIBCPP_VERSION)
++#if defined(__APPLE__) || defined(_LIBCPP_VERSION) || \
++    (!defined(__GLIBCXX__) && (!defined(__cpp_lib_chrono) || __cpp_lib_chrono < 201907L))
+ // libc++ (Apple's, and the NDK's on Android) does not expose
+-// clock_time_conversion or clock_cast.
++// clock_time_conversion or clock_cast. The feature-test check covers other
++// non-libstdc++ standard libraries without C++20 clock_cast; libstdc++ ships
++// clock_cast before it advertises __cpp_lib_chrono >= 201907L.
+ template <class, class>
+ struct clock_time_conversion {};
+ 
+diff --git a/thirdparty/CMakeLists.txt b/thirdparty/CMakeLists.txt
+index a1d30b2..a35196a 100644
+--- a/thirdparty/CMakeLists.txt
++++ b/thirdparty/CMakeLists.txt
+@@ -126,7 +126,9 @@ target_compile_options(aes128 PRIVATE -w)
+ 
+ # libmspack - LZX decompression (only lzxd.c needed for XEX decompression)
+ # Uses cabextract version which has all needed headers in one place
+-set(MSPACK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libmspack/cabextract/mspack")
++# Use the canonical source directory rather than cabextract's symbolic-link
++# mirror, which Git may materialize as one-line text files on Windows.
++set(MSPACK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libmspack/libmspack/mspack")
+ add_library(mspack STATIC
+     ${MSPACK_DIR}/lzxd.c
+ )

@@ -1,14 +1,16 @@
 .gitignore
 BUILD-NOTES.md
 LICENSE
-Launch FM4 Disc 2 Install.bat
+lfm4d2.bat
 Launch FM4.bat
+Launch FM4 (Fast Readback).bat
 README.md
 Split FM4 Registrar.ps1
 THIRD_PARTY_NOTICES.md
 assets/fm4-recompiled-hero.png
 docs/CONTRIBUTIONS.md
 docs/LEGAL.md
+docs/NATIVE_RENDERER.md
 docs/RELEASE_NOTES.md
 docs/RELEASING.md
 docs/STATUS.md
@@ -22,13 +24,27 @@ fm4/fm4_runtime.toml
 fm4/speechfacade_functions.toml
 fm4/src/fm4_app.cpp
 fm4/src/fm4_app.h
+fm4/src/d3d_probe.cpp
 fm4/src/hooks.cpp
+fm4/src/dev_keys.cpp
+fm4/src/brake_preview.cpp
+fm4/src/buy_stage.cpp
+fm4/src/overheat.cpp
+fm4/src/mods_menu.cpp
+fm4/src/staggered_wheels.cpp
+fm4/src/rim_picker.cpp
+fm4/src/multicar_trace.cpp
 fm4/src/main.cpp
 fm4/xmediafacade_functions.toml
+project-manifest.toml
 release/release-policy.json
 release/source-files.txt
+sdk-patches/0001-d3d12-deferred-readback-sync.patch
+tools/Automation-Agent.ps1
 tools/Build-Local.ps1
 tools/New-SourceRelease.ps1
 tools/Release.Common.ps1
 tools/Run-Local.ps1
 tools/Test-RepositoryBoundary.ps1
+validation/acceptance.toml
+validation/runs/.gitkeep

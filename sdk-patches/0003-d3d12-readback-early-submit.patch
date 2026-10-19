@@ -1,0 +1,106 @@
+From c9a0fe5089021ae003469b51fc0d6b44912fa3e1 Mon Sep 17 00:00:00 2001
+From: "FM4 perf (local)" <perf@local>
+Date: Thu, 15 Oct 2026 21:02:12 +0000
+Subject: [PATCH] perf(d3d12): submit resolve readback copies early and wait
+ only for them
+
+With d3d12_readback_resolve_deferred_sync, the sync point used to wait
+for every queued GPU operation, including draws recorded after the
+resolve. d3d12_readback_resolve_early_submit (default off) closes the
+command list right after the copy into guest RAM and waits only for the
+submission holding the latest copy, usually already finished.
+---
+ .../rex/graphics/d3d12/command_processor.h    |  5 +++
+ src/graphics/d3d12/command_processor.cpp      | 38 ++++++++++++++++++-
+ 2 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
+index cf30e69..82d94d0 100644
+--- a/include/rex/graphics/d3d12/command_processor.h
++++ b/include/rex/graphics/d3d12/command_processor.h
+@@ -409,6 +409,11 @@ class D3D12CommandProcessor : public CommandProcessor {
+   // (d3d12_readback_resolve_deferred_sync). Completed by
+   // FlushDeferredReadbackSync at the next guest-observable sync point.
+   bool readback_host_copy_sync_pending_ = false;
++  // Highest submission index holding a pending early-submitted readback copy
++  // (d3d12_readback_resolve_early_submit); 0 = none, UINT64_MAX = a pending
++  // copy is in an unsubmitted command list, so the sync point waits for all.
++  uint64_t readback_pending_submission_ = 0;
++  uint32_t rb_stat_early_submits_ = 0;
+   std::unordered_map<uint64_t, uint32_t> rb_stat_key_counts_;
+   static constexpr uint32_t kReadbackBufferSizeIncrement = 16 * 1024 * 1024;
+   static constexpr size_t kMaxReadbackBuffers = 256;
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 958ebf4..1fcdacf 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -49,6 +49,14 @@ REXCVAR_DEFINE_BOOL(d3d12_readback_resolve_deferred_sync, false, "GPU/D3D12",
+                     "writeback, swap or stall) instead of after every resolve")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_BOOL(d3d12_readback_resolve_early_submit, false, "GPU/D3D12",
++                    "With d3d12_readback_resolve_deferred_sync: submit the command list right "
++                    "after each resolve's copy into guest RAM, and at the next sync point wait "
++                    "only for the submission holding the latest copy, not for the draws recorded "
++                    "after it. The GPU starts the copy sooner and the wait is usually already "
++                    "over by the sync point")
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
+                     "Submit command list when PM4 primary buffer ends")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+@@ -2337,8 +2345,19 @@ void D3D12CommandProcessor::FlushDeferredReadbackSync() {
+     return;
+   }
+   readback_host_copy_sync_pending_ = false;
++  const uint64_t await_submission = readback_pending_submission_;
++  readback_pending_submission_ = 0;
+   const auto wait_begin = std::chrono::steady_clock::now();
+-  const bool wait_ok = AwaitAllQueueOperationsCompletion();
++  bool wait_ok;
++  if (await_submission != 0 && await_submission != UINT64_MAX &&
++      await_submission < submission_current_) {
++    // Early-submitted copies only: wait for the submission holding the latest
++    // one (no wait at all if the GPU already passed it).
++    CheckSubmissionFence(await_submission);
++    wait_ok = submission_completed_ >= await_submission;
++  } else {
++    wait_ok = AwaitAllQueueOperationsCompletion();
++  }
+   ++rb_stat_sync_waits_;
+   rb_stat_wait_us_ += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - wait_begin)
+@@ -3117,7 +3136,9 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+           rb_stat_point_waits_[i] = 0;
+           rb_stat_point_us_[i] = 0;
+         }
+-        REXGPU_INFO("readback deferred waits by sync point/300f:{}", points);
++        REXGPU_INFO("readback deferred waits by sync point/300f:{} | early submits {}", points,
++                    rb_stat_early_submits_);
++        rb_stat_early_submits_ = 0;
+       }
+       rb_stat_requests_ = rb_stat_skips_ = rb_stat_sync_waits_ = rb_stat_deferred_ = 0;
+       rb_stat_wait_us_ = 0;
+@@ -3328,6 +3349,19 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
+       // all copies recorded up to then in a single wait.
+       readback_host_copy_sync_pending_ = true;
+       ++rb_stat_deferred_;
++      if (readback_pending_submission_ != UINT64_MAX) {
++        // Submission that holds this copy. With early submission it is closed
++        // now so the GPU starts on it while the guest records more work, and
++        // the sync point waits only for it; otherwise wait for everything.
++        uint64_t copy_submission = submission_current_;
++        if (REXCVAR_GET(d3d12_readback_resolve_early_submit) && submission_open_ &&
++            CanEndSubmissionImmediately() && EndSubmission(false)) {
++          readback_pending_submission_ = std::max(readback_pending_submission_, copy_submission);
++          ++rb_stat_early_submits_;
++        } else {
++          readback_pending_submission_ = UINT64_MAX;
++        }
++      }
+       return true;
+     }
+     const auto wait_begin = std::chrono::steady_clock::now();
+-- 
+2.34.1
+

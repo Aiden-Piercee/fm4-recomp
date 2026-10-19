@@ -52,6 +52,10 @@ foreach ($extension in $policy.forbidden_extensions) { [void]$forbiddenExtension
 
 foreach ($trackedPathRaw in $inspectedPaths) {
     $trackedPath = $trackedPathRaw.Replace("\", "/")
+    if (-not (Test-Path -LiteralPath (Join-Path $root $trackedPath))) {
+        # Tracked but deleted or renamed in the working tree; it is not part of the source.
+        continue
+    }
     if (-not $allowed.Contains($trackedPath)) {
         throw "Tracked file is absent from the source allowlist: $trackedPath"
     }

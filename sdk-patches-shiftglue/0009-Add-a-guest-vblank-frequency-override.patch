@@ -1,0 +1,47 @@
+From 481f07e7de27d360d441e2f540a4996eb3bc9864 Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Sun, 30 Aug 2026 00:17:03 +0300
+Subject: [PATCH 09/11] Add a guest vblank frequency override
+
+shiftglue port: shiftglue's vblank worker derives its rate from
+Fh1GuestVblankHzForRenderLimit() (2x the render limit, or 2x
+video_mode_refresh_rate). A nonzero vblank_frequency_override replaces
+that rate; it no longer depends on vsync.
+---
+ src/graphics/graphics_system.cpp | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/src/graphics/graphics_system.cpp b/src/graphics/graphics_system.cpp
+index 0fa31d0..7b62117 100644
+--- a/src/graphics/graphics_system.cpp
++++ b/src/graphics/graphics_system.cpp
+@@ -39,6 +39,14 @@
+ REXCVAR_DEFINE_STRING(swap_post_effect, "none", "GPU", "Swap post effect: none, fxaa, fxaa_extreme")
+     .allowed({"none", "fxaa", "fxaa_extreme"});
+ 
++REXCVAR_DEFINE_INT32(vblank_frequency_override, 0, "GPU",
++                     "Override the guest vblank frequency in Hz (0 = default cadence). "
++                     "A title that presents every other vblank runs at half this rate, so 120 "
++                     "gives a 30fps-locked title a paced 60fps. A nonzero value replaces the "
++                     "FH1 render-limit cadence (2x the render limit or display refresh).")
++    .range(0, 1000)
++    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
++
+ REXCVAR_DEFINE_BOOL(store_shaders, true, "GPU",
+                     "Store shaders persistently and load them when loading games to avoid "
+                     "runtime spikes and freezes when playing the game not for the first time.");
+@@ -225,8 +233,12 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
+               REXCVAR_GET(pinyon_shift_fh1_render_fps_limit);
+           if (current_render_fps_limit != render_fps_limit) {
+             render_fps_limit = current_render_fps_limit;
+-            const double refresh_rate_hz = Fh1GuestVblankHzForRenderLimit(
+-                render_fps_limit, REXCVAR_GET(video_mode_refresh_rate));
++            const int32_t vblank_override_hz = REXCVAR_GET(vblank_frequency_override);
++            const double refresh_rate_hz =
++                vblank_override_hz > 0
++                    ? double(vblank_override_hz)
++                    : Fh1GuestVblankHzForRenderLimit(render_fps_limit,
++                                                     REXCVAR_GET(video_mode_refresh_rate));
+             interval_ticks =
+                 std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / refresh_rate_hz));
+           }

@@ -12,6 +12,10 @@ resolution_scale = 1
 # and trackside assets. Do not add a vblank override to the correctness preset.
 readback_resolve = "full"
 d3d12_readback_resolve_host_copy = true
+# Experimental (sdk-patches/0001): wait for the host copy once at the next
+# guest-visible sync point instead of after every resolve. Off in the
+# correctness preset; enable per run with Run-Local.ps1 -DeferredReadbackSync.
+d3d12_readback_resolve_deferred_sync = false
 render_target_path_d3d12 = "rov"
 # The host has no D3D12 debug layer installed; command-prefix diagnostics
 # isolated the failure without it.
@@ -33,5 +37,11 @@ mnk_mode = true
 # Normal launches use the files installed in user data.
 fm4_auto_install_disc2_content = true
 fm4_disc2_content_root = ""
+# Post-launch DLC: every FM4 marketplace STFS package found (recursively) under
+# FM4_DLC_ROOT, ./dlc-content or <user data>/dlc-content is installed once into
+# user data. Run-Local.ps1 -DlcContentRoot sets FM4_DLC_ROOT. The
+# fm4_dlc_content_root cvar also exists but is deliberately not set here so the
+# environment value is not shadowed.
+fm4_auto_install_dlc_content = true
 keybind_a = "Space"
 keybind_start = "Escape"

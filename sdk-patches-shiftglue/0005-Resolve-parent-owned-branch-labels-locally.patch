@@ -1,0 +1,61 @@
+From 46617f16c299ae35ef68492fbbdf0ad61f214c86 Mon Sep 17 00:00:00 2001
+From: Alexandros Mandravillis <Alexbeav@live.com>
+Date: Tue, 11 Aug 2026 00:49:33 +0300
+Subject: [PATCH 05/11] Resolve parent-owned branch labels locally
+
+shiftglue port: the local-label rule becomes case 4 of classifyTarget(),
+after shiftglue's owned-chunk case, and uses the caller FunctionNode
+reference.
+---
+ .../templates/test/ppc_test_functions_cpp.inja     |  1 +
+ src/codegen/function_graph.cpp                     | 14 +++++++++++---
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/resources/templates/test/ppc_test_functions_cpp.inja b/resources/templates/test/ppc_test_functions_cpp.inja
+index 6001ef1..d2e52fb 100644
+--- a/resources/templates/test/ppc_test_functions_cpp.inja
++++ b/resources/templates/test/ppc_test_functions_cpp.inja
+@@ -4,6 +4,7 @@
+ #include "ppc_config.h"
+ #include <rex/ppc.h>
+ #include <rex/logging.h>  // For REX_FATAL on unresolved calls
++#include <rex/system/checkpoint.h>
+ 
+ // Forward declarations
+ ## for func in functions
+diff --git a/src/codegen/function_graph.cpp b/src/codegen/function_graph.cpp
+index 0832c71..e23ec8b 100644
+--- a/src/codegen/function_graph.cpp
++++ b/src/codegen/function_graph.cpp
+@@ -1384,20 +1384,28 @@ TargetKind FunctionGraph::classifyTarget(uint32_t target, const FunctionNode& ca
+     }
+   }
+ 
+-  // Case 4: Target is a DIFFERENT function's entry point - this is a call/tail-call
++  // Case 4: A non-link branch to a label discovered in the emitted function
++  // stays local. Parent-owned continuation chunks are also dispatcher entry
++  // points, but that registration must not turn a proven local branch into a
++  // tail call. A link branch still calls the registered entry point.
++  if (!isCallInstruction && caller.isLabel(target)) {
++    return TargetKind::InternalLabel;
++  }
++
++  // Case 5: Target is a DIFFERENT function's entry point - this is a call/tail-call
+   // This handles cases where a small thunk function branches to another function
+   // whose entry point happens to fall within the thunk's address range
+   if (isEntryPoint(target)) {
+     return TargetKind::Function;
+   }
+ 
+-  // Case 5: Target is inside caller's function -> InternalLabel
++  // Case 6: Target is inside caller's function -> InternalLabel
+   // For bl, this would be a rare PIC code pattern
+   if (caller.containsAddress(target)) {
+     return TargetKind::InternalLabel;
+   }
+ 
+-  // Case 6: Unknown target
++  // Case 7: Unknown target
+   return TargetKind::Unknown;
+ }
+ 

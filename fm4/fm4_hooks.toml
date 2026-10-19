@@ -18,3 +18,791 @@ registers = ["r29"]
 name = "EnableClarksonVoiceoverSkip"
 address = 0x825195DC
 registers = ["r3"]
+
+# Optional serializer trace (no effect unless FM4_SERIAL_TRACE is set).
+# Each hook runs after the function's first instruction (mflr r12), so r12
+# holds the caller's return address. See hooks.cpp.
+[[midasm_hook]]
+name = "TraceSerU32"
+address = 0x8297A6C8
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerU16"
+address = 0x8297A820
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerU8"
+address = 0x8297A650
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerU64"
+address = 0x8297A740
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerBytes"
+address = 0x8297A5F0
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerBool"
+address = 0x8297A7B8
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerVec4"
+address = 0x8297AC58
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerVec2"
+address = 0x8297BDD0
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerMatrix"
+address = 0x8297A898
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerString"
+address = 0x8297FE38
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerWString"
+address = 0x8297FE78
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerBegin"
+address = 0x82969B90
+registers = ["r3", "r4", "r5", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "TraceSerRead"
+address = 0x82969298
+registers = ["r3", "r4", "r5"]
+
+[[midasm_hook]]
+name = "TraceSerCarModel"
+address = 0x829161E0
+registers = ["r3", "r4"]
+
+# Event List grid (scene 242_c_cal_grid): let it scroll so more than 310 events fit.
+# Runs at the start of the CGridControl setup step that checks BOOLEAN_ANIMATED
+# (+344) after the tile pool (+672) has been filled. See hooks.cpp.
+[[midasm_hook]]
+name = "EnableEventGridScrolling"
+address = 0x826464B4
+registers = ["r31"]
+
+# Event List grid: once setup has read LONG_GROUP_SPACING (only read for
+# non-scrolling grids), switch scrolling on.
+[[midasm_hook]]
+name = "EnableEventGridScrollingLate"
+address = 0x82646540
+registers = ["r31"]
+
+# Event List grid layout: keep the section gaps ("separators") that the layout
+# routine normally applies only to non-scrolling grids. r10 = BOOLEAN_ANIMATED.
+[[midasm_hook]]
+name = "KeepEventGridSectionGaps"
+address = 0x82642C28
+registers = ["r10", "r31"]
+
+# Event prize cars: finishing every race of a career event earns a choice of
+# prize cars through the level-up reward popup. See hooks.cpp ("Event prize
+# cars") and claude/prize-car-rewards-2026-10-12.md. FM4_PRIZE_CARS=0 disables.
+[[midasm_hook]]
+name = "PrizeCarEventPlaceUpdate"
+address = 0x8248CA30
+registers = ["r3", "r25", "r30"]
+
+[[midasm_hook]]
+name = "PrizeCarEventPlaceInsert"
+address = 0x8248CAB0
+registers = ["r25", "r30"]
+
+[[midasm_hook]]
+name = "PrizeCarQueueGuardA"
+address = 0x8249D460
+registers = ["r31"]
+jump_address_on_true = 0x8249D468
+
+[[midasm_hook]]
+name = "PrizeCarQueueGuardB"
+address = 0x8258C95C
+registers = ["r30"]
+jump_address_on_true = 0x8258C964
+
+[[midasm_hook]]
+name = "PrizeCarCaptureRange"
+address = 0x82449610
+registers = ["r5", "r6", "r12"]
+
+[[midasm_hook]]
+name = "PrizeCarSwapQuery"
+address = 0x82449630
+registers = ["r5"]
+
+[[midasm_hook]]
+name = "PrizeCarSeenLevel"
+address = 0x8245C52C
+registers = ["r29"]
+
+[[midasm_hook]]
+name = "PrizeCarQueueDone"
+address = 0x8245C7EC
+registers = ["r3"]
+
+[[midasm_hook]]
+name = "PrizeCarPopupMaxGift"
+address = 0x8250D320
+registers = ["r5"]
+
+[[midasm_hook]]
+name = "PrizeCarPopupQuery"
+address = 0x8250D3A8
+registers = ["r5"]
+
+[[midasm_hook]]
+name = "PrizeCarPopupSetQuery"
+address = 0x8250D790
+registers = ["r4"]
+
+[[midasm_hook]]
+name = "PrizeCarTitleFormat"
+address = 0x82449454
+registers = ["r4", "r5"]
+
+[[midasm_hook]]
+name = "PrizeCarTitleTable"
+address = 0x82449470
+registers = ["r4"]
+
+[[midasm_hook]]
+name = "PrizeCarFlushStart"
+address = 0x82454440
+registers = ["r31"]
+
+[[midasm_hook]]
+name = "PrizeCarFlushItem"
+address = 0x824544E0
+registers = ["r31"]
+
+[[midasm_hook]]
+name = "PrizeCarCreditsText"
+address = 0x824494CC
+registers = ["r11"]
+
+# Developer keys (fm4/src/dev_keys.cpp): F9 wins the next race of the
+# highlighted career event, Shift+F9 wins all its remaining races, F10 resets
+# the event. FM4_DEV_KEYS=0 disables.
+# Main game loop, once per frame, right after the XNotify pump (0x8239B338).
+[[midasm_hook]]
+name = "DevKeysFrame"
+address = 0x822F787C
+registers = ["r1", "r13", "fpscr"]
+
+# Event List selection-changed handler (0x824F42F8), just after it read the
+# highlighted row's Id column: r3 = EventId.
+[[midasm_hook]]
+name = "DevKeysEventHighlighted"
+address = 0x824F4344
+registers = ["r3"]
+
+# Real AI driver pool (fm4/src/hooks.cpp, pack tools/dlc/make_ai_drivers_pack.py):
+# career grid AI query "... WHERE RegionID=%d AND Rank=%d" gets ORDER BY RANDOM(),
+# so every driver sharing a region and rank can be picked. FM4_AI_DRIVER_POOL=0 disables.
+# r4 = format string, just before bl 0x824781A8 (sprintf).
+[[midasm_hook]]
+name = "AiDriverPoolQuery"
+address = 0x8249136C
+registers = ["r4"]
+
+# Upgrade-dependent engine audio (fm4/src/hooks.cpp,
+# claude/upgrade-audio-framework-2026-10-12.md). The stock game always uses the
+# race (L3) intake/exhaust sound slot of a car's _ET.xml. FM4_UPGRADE_AUDIO=0
+# disables.
+# Car audio descriptor builder (sub_823D4248), after "li r9,3" was stored to
+# desc+84 (intake) and desc+92 (exhaust): write the real part levels.
+[[midasm_hook]]
+name = "UpgradeAudioLevels"
+address = 0x823D47A0
+registers = ["r30", "r31"]
+
+# ET parser (sub_82A88A40), before it copies the chosen intake/exhaust slots:
+# fall back to a usable slot if the chosen one is empty or "NA.xml".
+[[midasm_hook]]
+name = "UpgradeAudioSlotGuard"
+address = 0x82A8AD1C
+registers = ["r30"]
+
+# Developer keys: remember the career header and the hub's affinity list when
+# the game refreshes them, so F8 / F11 can refresh them again (dev_keys.cpp).
+[[midasm_hook]]
+name = "DevKeysHeaderRefreshed"
+address = 0x82631D6C
+registers = ["r3"]
+
+[[midasm_hook]]
+name = "DevKeysAffinityRefreshed"
+address = 0x826304DC
+registers = ["r31"]
+
+# Upgrade shop brake preview (fm4/src/brake_preview.cpp,
+# claude/brake-upgrade-visuals-research-2026-10-12.md). FM4_BRAKE_PREVIEW=0
+# disables. Camera: give brakes (PartEnum 4) the preset suffix "Brakes"
+# (Upgrades_Brakes in UICarTargetCameraPresets.xml). r4 = suffix c-string,
+# r31 = PartEnum, just before the item's camera setter (vtable +92).
+[[midasm_hook]]
+name = "BrakePreviewCameraSuffix"
+address = 0x82605714
+registers = ["r4", "r31"]
+
+# Upgrade shop update (sub_82612AD0), just before it tests the car-refresh
+# byte screen+940: rebuild the shop car when brakes or rim sizes were bought,
+# or to show the highlighted brake (screen+860) while on the brake page.
+[[midasm_hook]]
+name = "BrakePreviewShopFrame"
+address = 0x82612B08
+registers = ["r31"]
+
+# A shop part page is set up (sub_82613FD0): r27+12 = its PartEnum.
+[[midasm_hook]]
+name = "BrakePreviewPageEnter"
+address = 0x826140B0
+registers = ["r27"]
+
+# Show-current-car (sub_824FF838), just before the installed-parts block (r25)
+# is passed to SetCar: swap in a copy with the previewed brake.
+[[midasm_hook]]
+name = "BrakePreviewPartsArg"
+address = 0x824FF9A4
+registers = ["r25"]
+
+# Shop part page setup (sub_82613FD0), just before its view flags go to vtable
+# +0x38: enable the car view (r4) for brakes, as the game does for springs.
+[[midasm_hook]]
+name = "BrakePreviewCarView"
+address = 0x82614308
+registers = ["r4", "r27"]
+
+# Diagnostic: log each car model build (sub_823D4C40 entry; r5 = car Id,
+# r7 = parts block).
+[[midasm_hook]]
+name = "BrakePreviewModelBuild"
+address = 0x823D4C40
+registers = ["r5", "r7"]
+
+# SetCar (sub_824DEA38), after the parts-block compare: after a brake
+# preview/purchase refresh, force one full reload of the render model
+# (r3 = "parts differ" -> 1, r22 = "keep loaded model" -> 0).
+[[midasm_hook]]
+name = "BrakePreviewForceReload"
+address = 0x824DEA80
+registers = ["r3", "r22"]
+
+# Parts-string resolver (sub_828B4080) entry: turn on the part-table byte +13
+# for exhaust (0x82D8A3E5) so List_UpgradeEngineExhaust.PartsStringID can
+# show/hide exhaust sections (all 0 in the stock DB -> no change until a pack).
+[[midasm_hook]]
+name = "ExhaustPartsFlag"
+address = 0x828B4080
+registers = ["r3"]
+
+# Parts-string resolver (sub_828B4080), "mr r5,r3" right after
+# GetInt("PartsStringID"): log the exhaust's PartsStringID (diagnostic).
+[[midasm_hook]]
+name = "ExhaustDiagStringId"
+address = 0x828B4E78
+registers = ["r3", "r27", "r23"]
+
+# Parts-string resolver token loop, "lbz r11,0(r11)": log each exhaust token.
+[[midasm_hook]]
+name = "ExhaustDiagToken"
+address = 0x828B4F48
+registers = ["r11", "r27"]
+
+# sub_82911BD0, just before it hides all "exhaust*" sections and re-shows the
+# rear bumper letter's exhaust: substitute the exhaust letter chosen by the
+# exhaust parts string (show list r26, hide list r22, letter string at r1+160).
+[[midasm_hook]]
+name = "ExhaustKitOverride"
+address = 0x82911F90
+registers = ["r1", "r22", "r26"]
+
+
+# Bigger grids, opt-in via FM4_MAX_CARS (fm4/src/hooks.cpp,
+# claude/car-limit-on-track-research-2026-10-12.md).
+# End of the options-object ctor (after stw r30,1724(r31)); r31 = the object.
+[[midasm_hook]]
+name = "MaxCarsOptions"
+address = 0x823EA5E0
+registers = ["r31"]
+after_instruction = true
+
+# maxaicars clamp in sub_825959D0, after "li r10,15".
+[[midasm_hook]]
+name = "MaxCarsAiClamp"
+address = 0x825972F4
+registers = ["r10", "r11"]
+after_instruction = true
+
+# AI driver query rank argument, after "or r6,r28,r28" (sub_82490DE8).
+[[midasm_hook]]
+name = "MaxCarsAiRank"
+address = 0x82491364
+registers = ["r6", "r28"]
+after_instruction = true
+
+# Attempt 2 at >16 cars: the global task queue at 0x82E115B0 holds only 16 pointers and the 17th
+# car's entry overwrites the count word (found via the worker crash at 0x82AA3E40). Relocate the
+# array to a bigger buffer at the four sites that materialise its address (fm4/src/hooks.cpp).
+[[midasm_hook]]
+name = "MaxCarsQueueBaseClear"
+address = 0x82AA12B0
+registers = ["r9"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "MaxCarsQueueBaseWorker"
+address = 0x82AA3E58
+registers = ["r28"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "MaxCarsQueueBaseAdd"
+address = 0x82AA46B8
+registers = ["r7"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "MaxCarsQueueBaseDtor"
+address = 0x82AA4750
+registers = ["r30"]
+after_instruction = true
+
+# Buy Cars on the main-menu stage (fm4/src/buy_stage.cpp, stage 1 spike).
+# CCarSelect setup (sub_824EF1E8), right after `li r4,3`: replace the screen
+# mode 3 (UI_NoCar) with the homespace mode (FM4_BUYCARS_STAGE_MODE, default 6).
+[[midasm_hook]]
+name = "BuyStageMode"
+address = 0x824EF21C
+registers = ["r4", "r31"]
+
+# Diagnostic: log SetCar (sub_824DEA38) calls while that list is open
+# (runs after the first instruction, so r12 = the caller).
+[[midasm_hook]]
+name = "BuyStageSetCar"
+address = 0x824DEA38
+registers = ["r3", "r4", "r12"]
+after_instruction = true
+
+# Buy Cars stage, stage 2 (fm4/src/buy_stage.cpp): show the highlighted car.
+# CCarSelect focus handler (sub_824FC670): r28 = highlighted car Id, r31 = screen.
+[[midasm_hook]]
+name = "BuyStageHighlight"
+address = 0x824FC6D0
+registers = ["r28", "r31"]
+
+# Main game loop, once per frame (the dev keys hook the instruction before).
+[[midasm_hook]]
+name = "BuyStageFrame"
+address = 0x822F7884
+registers = ["r1", "r13", "fpscr"]
+
+# Mode setter entry (sub_824FFA48): another screen opened, undo our stage changes.
+[[midasm_hook]]
+name = "BuyStageModeSet"
+address = 0x824FFA48
+registers = ["r4", "r1", "r13", "fpscr"]
+
+# Attempt 3: log + skip bad slots in the sub_8284E708 destructor and dump the node (hooks.cpp).
+[[midasm_hook]]
+name = "MaxCarsDtorProbe1"
+address = 0x8284E774
+registers = ["r3", "r29", "r31"]
+jump_address_on_true = 0x8284E784
+
+[[midasm_hook]]
+name = "MaxCarsDtorProbe2"
+address = 0x8284E7A0
+registers = ["r3", "r29", "r31"]
+jump_address_on_true = 0x8284E7B0
+
+# Attempt 3b: boxed small-integer cache (17 entries) -> 256 entries, relocated (hooks.cpp).
+[[midasm_hook]]
+name = "MaxCarsBoxBase"
+address = 0x82377348
+registers = ["r31"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "MaxCarsBoxLoop"
+address = 0x823773E4
+registers = ["r30"]
+jump_address_on_true = 0x8237739C
+
+# Attempt 3c probe: dump the object cleared at 0x822C5918 (crash site of the 17-car Start Race).
+[[midasm_hook]]
+name = "MaxCarsClearProbe"
+address = 0x822C5918
+registers = ["r3"]
+
+# Attempt 3d: do not register / clear peer-table entries for car index >= 16 (hooks.cpp).
+[[midasm_hook]]
+name = "MaxCarsPeerRegSkip"
+address = 0x82300088
+registers = ["r11"]
+jump_address_on_true = 0x823000D0
+
+[[midasm_hook]]
+name = "MaxCarsPeerClearSkip"
+address = 0x822C5948
+registers = ["r10"]
+jump_address_on_true = 0x822C5950
+
+# Probe: who passes this=-1 into the game-flow functions (>= 24 cars).
+[[midasm_hook]]
+name = "MaxCarsFlowProbeA"
+address = 0x826B1168
+registers = ["r1", "r3", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "MaxCarsFlowProbeB"
+address = 0x826B0058
+registers = ["r1", "r3", "r12"]
+after_instruction = true
+
+# Attempt 3e: second 16-entry lazy cache -> 64 entries, relocated (fixes the exit crash with 17 cars).
+[[midasm_hook]]
+name = "MaxCarsBox2Base"
+address = 0x824C4BD8
+registers = ["r29"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "MaxCarsBox2Loop"
+address = 0x824C4C94
+registers = ["r31"]
+jump_address_on_true = 0x824C4C38
+
+# Dynamic AI (fm4/src/hooks.cpp, claude/dynamic-ai-2026-10-13.md).
+# Race-day form: AI skill / temperament setters. FM4_AI_FORM=0 disables.
+[[midasm_hook]]
+name = "AiFormSkill"
+address = 0x82436A30
+registers = ["r3", "r4"]
+
+[[midasm_hook]]
+name = "AiFormTemper"
+address = 0x82436A38
+registers = ["r3", "r4"]
+
+# Random AI upgrade level under the PI limit: call to the AI upgrade faker
+# sub_823C4BE8 (f1 = target PI). FM4_AI_RANDOM_UPGRADES=0 disables.
+[[midasm_hook]]
+name = "AiRandomUpgradeTarget"
+address = 0x823CB870
+registers = ["f1"]
+
+# Probe: where does r31 become -1 in sub_826B0058 (>= 24 cars)?
+
+[[midasm_hook]]
+name = "MaxCarsR31ProbeA"
+address = 0x826B00C4
+registers = ["r31", "r1"]
+
+[[midasm_hook]]
+name = "MaxCarsR31ProbeB"
+address = 0x826B00D0
+registers = ["r31", "r1"]
+
+[[midasm_hook]]
+name = "MaxCarsR31ProbeC"
+address = 0x826B00D8
+registers = ["r31", "r1"]
+
+[[midasm_hook]]
+name = "MaxCarsR31ProbeD"
+address = 0x826994E8
+registers = ["r1", "r28"]
+
+# Buy Cars: colour screen (shown after choosing a car) uses the 3/4 camera instead of the rear view.
+[[midasm_hook]]
+name = "BuyStageColorInit"
+address = 0x8250BA70
+registers = ["r1", "r13", "fpscr"]
+
+# Buy Cars: EXPERIMENTAL direct buy on A (skips the colour screen). Returns true = skip the screen change.
+[[midasm_hook]]
+name = "BuyStageDirectBuy"
+address = 0x8250D200
+registers = ["r28", "r31", "r1", "r13", "fpscr"]
+jump_address_on_true = 0x8250D224
+
+# Attempt 3f: cap the list copy at 16 entries for the caller whose stack buffer holds 16 (hooks.cpp).
+[[midasm_hook]]
+name = "MaxCarsListCap"
+address = 0x826A5990
+registers = ["r28", "r29", "r30"]
+jump_address_on_true = 0x826A59C0
+
+# Attempt 3g: pad small allocations (operator new thunk) while the car-count override is on.
+[[midasm_hook]]
+name = "MaxCarsHeapPad"
+address = 0x82853370
+registers = ["r3"]
+
+# Probe: loader-thread crash, id->object lookup called with a blank map header (hooks.cpp).
+[[midasm_hook]]
+name = "MaxCarsLookupProbe"
+address = 0x822DE9B4
+registers = ["r31", "r30"]
+jump_address_on_true = 0x822DEA4C
+
+# Engine overheating / oil pressure failure (fm4/src/overheat.cpp).
+# sub_82304940 = per-car engine substep; this is right after it returned
+# from sub_82304548 (stock over-rev damage + sputter). r31 = car physics
+# object, f31 = substep dt. Not 0x82304960: that is a reentry label.
+# FM4_OVERHEAT=0 disables (1 = probe log + F12 test key, 2 = + heat model).
+[[midasm_hook]]
+name = "OverheatEngineStep"
+address = 0x82304964
+registers = ["r31", "f31"]
+
+# ---------------------------------------------------------------------------
+# "OPTIONS & MODS" main-menu tile (fm4/src/mods_menu.cpp).
+# claude/main-menu-mods-tile-research-2026-10-13.md. FM4_MODS_MENU=0 = off.
+# ---------------------------------------------------------------------------
+# Main-menu builder 0x825EA638, after the top-level tiles (both paths of the
+# hidden disc-2 tile check meet here). r31 = CSplash, [r31+356] = menu.
+[[midasm_hook]]
+name = "ModsMenuBuild"
+address = 0x825EA8B4
+registers = ["r1", "r13", "fpscr", "r31"]
+
+# Main-menu select handler 0x82607FF0: r30 = selected item id, r31 = screen.
+[[midasm_hook]]
+name = "ModsMenuSelect"
+address = 0x8260802C
+registers = ["r1", "r13", "fpscr", "r30", "r31"]
+
+# CSplash input handler entry: swallow pad input while the MODS overlay is open.
+[[midasm_hook]]
+name = "ModsMenuInput"
+address = 0x82617698
+registers = ["r3"]
+return_on_true = true
+
+# Localized-string GetText (leaf, vtable 0x8200256C slot 5): our tile labels.
+[[midasm_hook]]
+name = "ModsMenuText"
+address = 0x823804E8
+registers = ["r3"]
+return_on_true = true
+
+# ---------------------------------------------------------------------------
+# Staggered wheels: separate front and rear rims (staggered_wheels.cpp,
+# claude/separate-front-rear-wheels-research-2026-10-12.md).
+# FM4_STAGGERED_WHEELS=0 disables, FM4_STAGGERED_WHEELS_PIN=0 only the picker.
+# A: rear wheel name column in the car-setup query (sub_823D4C40).
+[[midasm_hook]]
+name = "StaggerSelectHead"
+address = 0x823D4FAC
+registers = ["r4", "r14", "r16"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "StaggerFrontNameSeen"
+address = 0x823D5E24
+registers = ["r3", "r16"]
+
+[[midasm_hook]]
+name = "StaggerRearColumn"
+address = 0x823D5E48
+registers = ["r4"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "StaggerRearNameSeen"
+address = 0x823D5E6C
+registers = ["r3", "r16"]
+
+# B: load the rear rim into the second wheel model slot (sub_8290A860).
+[[midasm_hook]]
+name = "StaggerRearModelName"
+address = 0x8290AE30
+registers = ["r26", "r29"]
+
+[[midasm_hook]]
+name = "StaggerRearDirSuffix"
+address = 0x8290AE48
+registers = ["r5"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "StaggerRearSlodDirSuffix"
+address = 0x8290AEC4
+registers = ["r5"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "StaggerRearModelSuffix"
+address = 0x8290AF30
+registers = ["r5"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "StaggerRearSlodModelSuffix"
+address = 0x8290AF44
+registers = ["r5"]
+after_instruction = true
+
+# C: front wheels -> first model, rear wheels -> second model (sub_82909730).
+[[midasm_hook]]
+name = "StaggerWheelPointers"
+address = 0x829097EC
+registers = ["r10", "r11", "r29", "r30", "r31"]
+
+# D: rear-rim picker (F2 / right-stick click) in the upgrade shop update (sub_82612AD0).
+[[midasm_hook]]
+name = "StaggerShopFrame"
+address = 0x82612AE4
+registers = ["r31"]
+
+# Multi-car front-end trace (fm4/src/multicar_trace.cpp). LOG ONLY, off unless
+# fm4_mcar_trace (F4 overlay) or FM4_MCAR_TRACE=1. Each hook runs after the
+# function's first instruction (mflr r12): r12 = caller, r1 = caller's stack.
+[[midasm_hook]]
+name = "McarModeSet"
+address = 0x8251BAA8
+registers = ["r3", "r4", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarShowCar"
+address = 0x824FF838
+registers = ["r3", "r4", "r5", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarSetCar"
+address = 0x824DF7B0
+registers = ["r3", "r4", "r5", "r6", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarCameraType"
+address = 0x82652368
+registers = ["r3", "r4", "r5", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarPresCtor"
+address = 0x828DB578
+registers = ["r3", "r4", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarPresDtor"
+address = 0x828DB778
+registers = ["r3", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarDeferredCtor"
+address = 0x828D8A18
+registers = ["r3", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarDeferredDtor"
+address = 0x828D8AE0
+registers = ["r3", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarHomespaceCtor"
+address = 0x824CB278
+registers = ["r3", "r4", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarHomespaceDtor"
+address = 0x824CB300
+registers = ["r3", "r12"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarPhotoIngameCtor"
+address = 0x825AF638
+registers = ["r3", "r12", "r1"]
+after_instruction = true
+
+[[midasm_hook]]
+name = "McarPhotoShowroomCtor"
+address = 0x825AF6E8
+registers = ["r3", "r12", "r1"]
+after_instruction = true
+
+# Trace v2: deferred ICarPresentation::SetTransform (slot 8), after its mflr.
+[[midasm_hook]]
+name = "McarSetTransform"
+address = 0x82352160
+registers = ["r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r12", "r1"]
+after_instruction = true
+
+# Second-car experiment (fm4_mcar_second_car): manager frame update sub_8239A5E8,
+# right after bl sub_8239A718 (environment update). r31 = CUI4ForzaUIManager.
+[[midasm_hook]]
+name = "McarEnvFrame"
+address = 0x8239A6AC
+registers = ["r31", "r1", "f31"]
+
+# Trace v3: car placement sub_824B9B30(CUI4Car*, f1, f2, f3), after its mflr.
+[[midasm_hook]]
+name = "McarPlace"
+address = 0x824B9B30
+registers = ["r3", "f1", "f2", "f3", "r12", "r1"]
+after_instruction = true
+
+# Second-car experiment v3: the game unloads the stage cars (sub_824DD990); release car2 first.
+[[midasm_hook]]
+name = "McarUnloadAll"
+address = 0x824DD990
+registers = ["r3", "r1"]
+after_instruction = true
+
+# Trace v4: deferred render-command queue sub_8233E908 (r4 exec fn, r5 target, r7 command), after its mflr.
+[[midasm_hook]]
+name = "McarDeferredQueue"
+address = 0x8233E908
+registers = ["r4", "r5", "r7", "r12", "r1"]
+after_instruction = true
+
+# Second-car fix: skip the "DestroyAllCars" in the front-end car release sub_824DD838 for our car2,
+# release car2 first when the game releases another car. Hook on the bctrl; r31 = the CUI4Car.
+[[midasm_hook]]
+name = "McarDestroyAll"
+address = 0x824DD85C
+registers = ["r31", "r1"]
+jump_address_on_true = 0x824DD860

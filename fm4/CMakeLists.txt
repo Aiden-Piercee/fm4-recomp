@@ -14,6 +14,15 @@ include(generated/rexglue.cmake)
 set(FM4_SOURCES
     src/main.cpp
     src/hooks.cpp
+    src/dev_keys.cpp
+    src/brake_preview.cpp
+    src/buy_stage.cpp
+    src/overheat.cpp
+    src/mods_menu.cpp
+    src/staggered_wheels.cpp
+    src/rim_picker.cpp
+    src/d3d_probe.cpp
+    src/multicar_trace.cpp
     src/fm4_app.cpp
 )
 
