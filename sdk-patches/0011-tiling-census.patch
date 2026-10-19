@@ -1,0 +1,88 @@
+Subject: diag: log how a frame splits across predicated tiling bins
+
+gpu_tiling_census_every (default 0 = off) logs, every that many swaps and
+for at most 8 frames, the frame's draws grouped by bin select, bin mask,
+window y offset, whether they were predicated and whether predication
+skipped them. It shows whether and how a title renders in predicated tiles.
+---
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index 2ee0ba8..bfd47e9 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -19,6 +19,8 @@
+ #include <vector>
+ 
+ #include <fmt/format.h>
++#include <map>
++#include <tuple>
+ 
+ #include <rex/cvar.h>
+ #include <rex/dbg.h>
+@@ -39,6 +41,10 @@
+ #include <rex/system/user_module.h>
+ 
+ REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
++REXCVAR_DEFINE_INT32(gpu_tiling_census_every, 0, "GPU",
++                     "Diagnostics: every this many swaps, log how one frame's draws split "
++                     "across predicated tiling bin selects and window offsets (0: off; at most "
++                     "8 frames are logged)");
+ REXCVAR_DEFINE_BOOL(frame_time_stats, true, "GPU",
+                     "Log guest frame pacing (host time and guest vblanks between swaps) "
+                     "every frame_time_stats_window swaps");
+@@ -107,6 +113,18 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
+ 
+ namespace rex::graphics {
+ 
++namespace {
++// gpu_tiling_census_every: draws of the frame being logged, by
++// (bin select, bin mask, window y offset, predicated, executed).
++struct TilingCensus {
++  uint64_t swaps = 0;
++  uint32_t frames_logged = 0;
++  bool active = false;
++  std::map<std::tuple<uint32_t, uint32_t, int32_t, bool, bool>, uint32_t> draws;
++};
++TilingCensus tiling_census;
++}  // namespace
++
+ using namespace rex::graphics::xenos;
+ 
+ namespace {
+@@ -910,6 +928,37 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
+     trace_writer_.WritePacketStart(uint32_t(reader->read_ptr() - 4), 1 + count);
+   }
+ 
++  if (const int32_t census_every = REXCVAR_GET(gpu_tiling_census_every); census_every > 0) {
++    TilingCensus& census = tiling_census;
++    if (opcode == PM4_XE_SWAP && !(packet & 1)) {
++      if (census.active) {
++        std::string line;
++        uint32_t total = 0, skipped = 0;
++        for (const auto& [key, draws] : census.draws) {
++          const auto& [select, mask, window_y, predicated, executed] = key;
++          line += fmt::format(" [sel {:08X} mask {:08X} wy {} {}{}]={}", select, mask, window_y,
++                              predicated ? "pred" : "-", executed ? "" : " SKIP", draws);
++          total += draws;
++          if (!executed) skipped += draws;
++        }
++        REXGPU_INFO("tiling census swap {}: {} draws, {} skipped by predication:{}", census.swaps,
++                    total, skipped, line);
++        census.active = false;
++        census.draws.clear();
++        ++census.frames_logged;
++      }
++      ++census.swaps;
++      if (census.frames_logged < 8 && census.swaps % uint64_t(census_every) == 0) {
++        census.active = true;
++      }
++    } else if (census.active && (opcode == PM4_DRAW_INDX || opcode == PM4_DRAW_INDX_2)) {
++      const bool predicated = packet & 1;
++      const bool executed = !predicated || (bin_select_ & bin_mask_) != 0;
++      const int32_t window_y = register_file_->Get<reg::PA_SC_WINDOW_OFFSET>().window_y_offset;
++      ++census.draws[{uint32_t(bin_select_), uint32_t(bin_mask_), window_y, predicated, executed}];
++    }
++  }
++
+   // & 1 == predicate - when set, we do bin check to see if we should execute
+   // the packet. Only type 3 packets are affected.
+   // We also skip predicated swaps, as they are never valid (probably?).

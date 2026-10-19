@@ -27,3 +27,4 @@ pwsh -File .\tools\Build-Local.ps1 -GameDataRoot "D:\Games\FM4-extracted" -SdkOn
 - `0008-precise-vblank-timer.patch`: `vblank_precise_timer` delivers guest vblanks on time instead of up to 1-2 ms late.
 - `0009-native-executor-single-sample-msaa.patch`: `native_executor_single_sample_msaa` creates guest MSAA surfaces with one host sample (no anti-aliasing) to save GPU bandwidth.
 - `0010-native-executor-max-msaa-samples.patch`: `native_executor_max_msaa_samples` caps host MSAA samples; `2` stores guest 4x surfaces as 2x, keeping some anti-aliasing at lower cost.
+- `0011-tiling-census.patch`: `gpu_tiling_census_every` logs how a frame's draws split across predicated tiling bins and window offsets (diagnostics, default off).
