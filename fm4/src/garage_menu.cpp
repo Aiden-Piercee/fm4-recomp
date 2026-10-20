@@ -216,6 +216,7 @@ void GarageMenuSetUserEnabled(bool on) { REXCVAR_SET(fm4_garage_menu, on); }
 int EvoNewestUnlockedDecadeYear();  // dev_keys.cpp
 // used_lot.cpp (the listings).
 int UsedLotCount();
+std::string UsedLotNameColumnSql();
 bool UsedLotGet(int index, uint32_t* car_id, uint32_t* price, uint32_t* mileage_km, bool* condition_unknown,
                 uint32_t* thumb_car_id);
 
@@ -250,7 +251,17 @@ bool GarageMenuCarListQuery(uint32_t& query_ptr) {
       : " AND Garage.Year BETWEEN " + std::to_string(decade) + " AND " + std::to_string(decade + 9);
   if (!g_query_buf) g_query_buf = REX_KERNEL_MEMORY()->SystemHeapAlloc(kQueryBufSize);
   if (!g_query_buf) return false;
-  const std::string out = q.substr(0, order) + clause + q.substr(order);
+  std::string head = q.substr(0, order);
+  // Used lot listings hide PI and class until bought (untested: the game may read the later stock columns).
+  if (!lot_ids.empty()) {
+    const size_t star = head.find(" *, 0 AS PartsValue");
+    if (star != std::string::npos) {
+      head.insert(star, " 0 AS PerformanceIndex, 0 AS ClassID,");
+      const std::string name_sql = UsedLotNameColumnSql();
+      if (!name_sql.empty()) head.insert(star, " " + name_sql);
+    }
+  }
+  const std::string out = head + clause + q.substr(order);
   uint8_t* dst = REX_KERNEL_MEMORY()->TranslateVirtual<uint8_t*>(g_query_buf);
   std::memcpy(dst, out.c_str(), out.size() + 1);
   query_ptr = g_query_buf;

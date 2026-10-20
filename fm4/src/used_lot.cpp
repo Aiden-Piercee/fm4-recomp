@@ -32,6 +32,9 @@
 // ---------------------------------------------------------------------------
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ppc.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/xmemory.h>
 
 #include <atomic>
 #include <cstdint>
@@ -54,6 +57,8 @@ void EvoOnFrame(void (*cb)());
 uint32_t EvoResultSerial();
 void EvoLastResult(uint32_t* event_id, int* place);
 int EvoNewestUnlockedDecadeYear();
+// garage_menu.cpp: true while the buy screens were opened from USED CAR DEALERSHIP.
+bool GarageUsedLotActive();
 
 namespace {
 
@@ -88,6 +93,11 @@ bool Enabled() {
   return env_on && REXCVAR_GET(fm4_used_lot_rotation);
 }
 
+uint32_t Load32(uint32_t a) {
+  const uint8_t* p = REX_KERNEL_MEMORY()->TranslateVirtual<const uint8_t*>(a);
+  return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+}
+
 std::string Replace(std::string s, const std::string& from, const std::string& to) {
   for (size_t at = s.find(from); at != std::string::npos; at = s.find(from, at + to.size())) s.replace(at, from.size(), to);
   return s;
@@ -117,6 +127,29 @@ constexpr const char* kRollInsert =
 
 void Tick();
 void LoadSlot(int slot);
+
+// Applies the hidden build to the car just bought (newest garage row of that model). The wear model (part_tune.cpp)
+// reads DistanceDriven (km), NumOwners and TotalRepairs, so mileage and history feed it directly. Kinds 4 (swapped
+// down) and 5 (broken) replace the engine with a weaker one from another car's stock engine row and scale the cached
+// PI; the game recomputes PI properly the next time the car is changed in the shop. [T] untested in game.
+void ApplyBuild(uint32_t car_id, const Listing& l) {
+  const std::string id = std::to_string(car_id);
+  const std::string row = "(SELECT MAX(Id) FROM {P}Career_Garage WHERE CarId=" + id + ")";
+  const int owners = 1 + int(l.mileage_km / 60000) + (l.kind >= 4 ? 1 : 0);
+  const int repairs = l.kind == 5 ? 4 : (l.kind == 4 ? 2 : 0);
+  EvoDbQueue(("UPDATE {P}Career_Garage SET DistanceDriven=" + std::to_string(l.mileage_km) + ", NumOwners=" +
+              std::to_string(owners) + ", TotalRepairs=" + std::to_string(repairs) + " WHERE Id=" + row).c_str());
+  if (l.kind < 4) return;
+  const std::string limit = l.kind == 5 ? "0.35" : "0.65";  // donor power below this share of the car's own
+  EvoDbQueue(("UPDATE {P}Career_Garage SET Engine=COALESCE((SELECT u.Id FROM List_UpgradeEngine u JOIN Data_Car dc "
+              "ON dc.Id=u.Ordinal WHERE u.IsStock=1 AND dc.SimPeakPower>0 AND dc.SimPeakPower < " + limit +
+              " * (SELECT SimPeakPower FROM Data_Car WHERE Id=" + id + ") ORDER BY RANDOM() LIMIT 1), Engine) WHERE Id=" +
+              row).c_str());
+  EvoDbQueue(("UPDATE {P}Career_Garage SET PerformanceIndex=PerformanceIndex * MIN(1.0, 0.4 + 0.6 * COALESCE(("
+              "SELECT dc.SimPeakPower FROM List_UpgradeEngine u JOIN Data_Car dc ON dc.Id=u.Ordinal WHERE u.Id="
+              "{P}Career_Garage.Engine) / (SELECT SimPeakPower FROM Data_Car WHERE Id=" + id + "), 1.0)) WHERE Id=" +
+              row + " AND Engine<>" + std::to_string(car_id * 1000u)).c_str());
+}
 
 // ---- loading the listings back, one slot per read ------------------------------------------------------------
 void OnSlot(const int32_t* v, int n) {
@@ -237,6 +270,14 @@ bool UsedLotGet(int index, uint32_t* car_id, uint32_t* price, uint32_t* mileage_
   return true;
 }
 
+// Build kind of a listed car (0 untouched, 1 street, 2 upgraded, 3 wild, 4 swapped down, 5 broken), -1 when it is not listed.
+// For the status box (used_lot_overlay.cpp); it only shows it when the reveal switch is on.
+int UsedLotKindForCar(uint32_t car_id) {
+  for (const Listing& l : g_lot)
+    if (l.car_id == car_id) return l.kind;
+  return -1;
+}
+
 uint32_t UsedLotVersion() { return g_version.load(); }
 
 // The hidden build is only recorded for now; applying it to the new garage car is the next step.
@@ -248,6 +289,7 @@ void UsedLotOnPurchase(uint32_t car_id) {
     EvoDbQueue(("INSERT INTO {P}Evolution_UsedBought (CarId, MileageKm, BuildKind, BoughtAt) SELECT CarId, MileageKm, "
                 "BuildKind, CAST(strftime('%s','now') AS INTEGER) FROM {P}Evolution_UsedLot WHERE CarId=" + id).c_str());
     EvoDbQueue(("DELETE FROM {P}Evolution_UsedLot WHERE CarId=" + id).c_str());
+    ApplyBuild(car_id, g_lot[i]);
     REXLOG_INFO("Used lot: car {} bought (build kind {} recorded)", car_id, g_lot[i].kind);
     g_lot.erase(g_lot.begin() + long(i));
     ++g_version;
@@ -257,3 +299,13 @@ void UsedLotOnPurchase(uint32_t car_id) {
 
 bool UsedLotRotationUserEnabled() { return REXCVAR_GET(fm4_used_lot_rotation); }
 void UsedLotSetRotationUserEnabled(bool on) { REXCVAR_SET(fm4_used_lot_rotation, on); }
+
+// Hook UsedLotBought, 0x824332D8 in the purchase function sub_82433230: the car has just been added to the garage
+// (credits were checked and not yet taken). r31 = the bought car id. Only a purchase made from USED CAR DEALERSHIP
+// (car-list flow 11) takes the listing out of the lot.
+void UsedLotBought(PPCRegister& r31) {
+  if (!Enabled() || !GarageUsedLotActive()) return;
+  const uint32_t g = Load32(0x82DC3828);  // G; G+16 = car-list flow (11 = buy new)
+  if (g < 0x10000 || Load32(g + 16) != 11) return;
+  UsedLotOnPurchase(r31.u32);
+}

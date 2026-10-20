@@ -40,6 +40,10 @@ fm4/src/mods_menu.cpp
 fm4/src/garage_menu.cpp
 fm4/src/part_tune.cpp
 fm4/src/used_lot.cpp
+fm4/src/used_lot_names.cpp
+fm4/src/used_lot_names.inc
+fm4/src/shop_filter.cpp
+fm4/src/used_lot_overlay.cpp
 fm4/src/staggered_wheels.cpp
 fm4/src/rim_picker.cpp
 fm4/src/multicar_trace.cpp

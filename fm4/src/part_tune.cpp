@@ -89,23 +89,32 @@ bool Provider(uint32_t car_phys, float& cooling_tier, float& wear) {
   // Size ratio and biases come from Evolution_PartTune joined on the fitted camshaft and fuel system rows;
   // a missing table or row gives NULL -> 0 -> neutral (the code above treats 0 as 1.0).
   char sql[1024];
+  // Query A needs only game tables, so a missing Evolution_PartTune never disables cooling/wear.
+  // Columns: 0 cooling Level, 1 DistanceDriven, 2 CurOwnerNumRaces, 3 NumOwners, 4 TotalRepairs, 5 cam RedlineRPM.
   std::snprintf(sql, sizeof sql,
-      "SELECT COALESCE(o.Level,0), g.DistanceDriven, g.CurOwnerNumRaces, g.NumOwners, g.TotalRepairs, "
-      "COALESCE(f.Size,0) / MAX(COALESCE(ca.Size,0),0.0001), "
-      "COALESCE(f.LowBias,0), COALESCE(f.MidBias,0), COALESCE(f.HighBias,0), cam.RedlineRPM "
+      "SELECT COALESCE(o.Level,0), g.DistanceDriven, g.CurOwnerNumRaces, g.NumOwners, g.TotalRepairs, cam.RedlineRPM "
       "FROM %sCareer_Garage g "
       "LEFT JOIN List_UpgradeEngineOilCooling o ON o.Id = g.OilCooling "
       "LEFT JOIN List_UpgradeEngineCamshaft cam ON cam.Id = g.Camshaft "
+      "WHERE g.Id = %d",
+      g_profile_prefix, g_garage_id);
+  if (g_garage_id <= 0 || q(sql, row, 1, 16) < 1) return false;
+  row[9] = row[5]; row[5] = 0;
+  // Query B (optional): per-part tune from Evolution_PartTune (fuel system PartEnum 16, camshaft PartEnum 12).
+  // Columns: 0 size ratio fuel/cam, 1..3 low/mid/high bias of the fuel system. Any error (table missing) = neutral.
+  double tb[16] = {};
+  std::snprintf(sql, sizeof sql,
+      "SELECT COALESCE(f.Size,0) / MAX(COALESCE(ca.Size,0),0.0001), COALESCE(f.LowBias,0), COALESCE(f.MidBias,0), COALESCE(f.HighBias,0) "
+      "FROM %sCareer_Garage g "
       "LEFT JOIN Evolution_PartTune f ON f.PartEnum = 16 AND f.PartId = g.FuelSystem "
       "LEFT JOIN Evolution_PartTune ca ON ca.PartEnum = 12 AND ca.PartId = g.Camshaft "
       "WHERE g.Id = %d",
       g_profile_prefix, g_garage_id);
-  if (g_garage_id <= 0 || q(sql, row, 1, 16) < 1) return false;
+  if (q(sql, tb, 1, 16) >= 1) { row[5] = tb[0]; row[6] = tb[1]; row[7] = tb[2]; row[8] = tb[3]; }
   CarTune t;
   t.cooling = static_cast<float>(row[0]);
   t.wear = WearFrom(row[1], row[2], row[3], row[4]);
-  float ratio = row[5] > 0.0 ? static_cast<float>(row[5]) : 1.0f;
-  ApplyMismatch(t, ratio);
+  if (row[5] > 0.0) ApplyMismatch(t, static_cast<float>(row[5]));  // no Evolution_PartTune data = no match bonus either
   t.low *= row[6] > 0.0 ? static_cast<float>(row[6]) : 1.0f;
   t.mid *= row[7] > 0.0 ? static_cast<float>(row[7]) : 1.0f;
   t.high *= row[8] > 0.0 ? static_cast<float>(row[8]) : 1.0f;

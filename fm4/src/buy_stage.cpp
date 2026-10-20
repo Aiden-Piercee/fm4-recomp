@@ -483,6 +483,9 @@ void BuyStageHighlight(PPCRegister& r28, PPCRegister& r31) {
   }
 }
 
+// Highlighted car in the open buy list, 0 when none (used_lot_overlay.cpp).
+uint32_t BuyStageHighlightedCar() { return g_list_open ? g_pending : 0; }
+
 // 0x822F7884, main game loop, once per frame (the dev keys use 0x822F787C).
 void BuyStageFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
   if (!Enabled() || !g_list_open || g_faulted) return;

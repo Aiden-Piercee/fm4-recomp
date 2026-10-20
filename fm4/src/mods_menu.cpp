@@ -65,6 +65,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -307,6 +308,11 @@ bool EngineReliabilityEnabled();       // overheat.cpp: engine reliability toggl
 void EngineReliabilitySetEnabled(bool on);
 bool EvoUnlockEnabled();               // dev_keys.cpp: Evolution decade unlock + HUD switches
 void EvoUnlockSetEnabled(bool on);
+bool EvoContractEnabled();             // dev_keys.cpp: contract-out switch
+void EvoContractSetEnabled(bool on);
+void EvoContractOut(int decade);
+int EvoContractLastResult();
+int EvoContractOwed();
 bool EvoHudVisible();
 void EvoHudSetVisible(bool on);
 bool EvoIntroUserEnabled();            // dev_keys.cpp: Evolution intro popup
@@ -329,6 +335,18 @@ bool PartWearEnabled();
 void PartWearSetEnabled(bool on);
 bool UsedLotRotationUserEnabled();
 void UsedLotSetRotationUserEnabled(bool on);
+bool ShopEraLockEnabled();
+void ShopEraLockSetEnabled(bool on);
+bool ShopRareEnabled();
+void ShopRareSetEnabled(bool on);
+bool ShopStockVaryEnabled();
+void ShopStockVarySetEnabled(bool on);
+bool UsedLotMileageNamesEnabled();
+void UsedLotMileageNamesSetEnabled(bool on);
+bool UsedLotOverlayEnabled();
+void UsedLotOverlaySetEnabled(bool on);
+bool UsedLotRevealEnabled();
+void UsedLotRevealSetEnabled(bool on);
 bool ModsMenuText(PPCRegister& r3) {
   if (GarageMenuText(r3)) return true;
   if (!g_scratch) return false;
@@ -618,9 +636,49 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
     if (ImGui::Checkbox("Engine wear (age/mileage power loss)", &pwear)) PartWearSetEnabled(pwear);
     bool ulot = UsedLotRotationUserEnabled();
     if (ImGui::Checkbox("Rotating used lot (new stock after each finished event; applies at the next roll)", &ulot)) UsedLotSetRotationUserEnabled(ulot);
+    bool shop_era = ShopEraLockEnabled();
+    if (ImGui::Checkbox("Shop: era-locked parts (higher tiers and later-decade part types appear as decades open; next pass)", &shop_era)) ShopEraLockSetEnabled(shop_era);
+    bool shop_rare = ShopRareEnabled();
+    if (ImGui::Checkbox("Shop: rare parts (only some are on sale at a time)", &shop_rare)) ShopRareSetEnabled(shop_rare);
+    bool shop_vary = ShopStockVaryEnabled();
+    if (ImGui::Checkbox("Shop: stock varies after finished events (rare parts re-roll; sparse / normal / flooded days)", &shop_vary)) ShopStockVarySetEnabled(shop_vary);
+    bool lot_names = UsedLotMileageNamesEnabled();
+    if (ImGui::Checkbox("Used lot: mileage in the listing name (English; next list open)", &lot_names)) UsedLotMileageNamesSetEnabled(lot_names);
+    bool ulov = UsedLotOverlayEnabled();
+    if (ImGui::Checkbox("Used lot: status box next to the price (mileage, owners, condition)", &ulov)) UsedLotOverlaySetEnabled(ulov);
+    bool ulrev = UsedLotRevealEnabled();
+    if (ImGui::Checkbox("Used lot: reveal hidden condition before buying", &ulrev)) UsedLotRevealSetEnabled(ulrev);
     bool evo_unlock = EvoUnlockEnabled();
     if (ImGui::Checkbox("Evolution decade unlock (next decade opens after a championship + 4 events; off = columns stay as they are)", &evo_unlock))
       EvoUnlockSetEnabled(evo_unlock);
+    bool evo_contract = EvoContractEnabled();
+    if (ImGui::Checkbox("Evolution contract-out (skip a decade, repay 50% of winnings)", &evo_contract))
+      EvoContractSetEnabled(evo_contract);
+    if (evo_contract) {
+      static const char* const kDecades[] = {"1960s", "1970s", "1980s", "1990s", "2000s", "2010s"};
+      static const int kFees[] = {10000, 15000, 20000, 30000, 40000, 50000};
+      static int confirm = -1;
+      static bool requested = false;  // LastResult is 0 until the first request, so show status only after one
+      ImGui::TextUnformatted("  Skip a decade (fee is taken from future winnings):");
+      for (int d = 0; d < 6; ++d) {
+        ImGui::SameLine();
+        char label[48];
+        std::snprintf(label, sizeof(label), "%s##skip%d", kDecades[d], d);
+        if (ImGui::SmallButton(label)) confirm = d;
+      }
+      if (confirm >= 0) {
+        ImGui::Text("  Skip the %s for $%d, repaid as 50%% of winnings?", kDecades[confirm], kFees[confirm]);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Sign")) { EvoContractOut(confirm); requested = true; confirm = -1; }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Cancel")) confirm = -1;
+      }
+      const int res = EvoContractLastResult();
+      if (!requested) {}
+      else if (res == 0) ImGui::TextUnformatted("  Signing ...");
+      else if (res == 1) ImGui::Text("  Signed, owe $%d", EvoContractOwed());
+      else if (res == 2) ImGui::TextUnformatted("  Refused (already owing, already skipped, or off)");
+    }
     bool evo_hud = EvoHudVisible();
     if (ImGui::Checkbox("Evolution HUD (top-left progress readout)", &evo_hud))
       EvoHudSetVisible(evo_hud);

@@ -82,8 +82,19 @@ constexpr int VK_SHIFT = 0x10, VK_F6 = 0x75, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 
 // tab (getters/setters at the end of this file). Read every time the code runs, no restart. FM4_EVO_HUD=0 turns the HUD off at startup.
 REXCVAR_DEFINE_BOOL(fm4_evo_unlock, true, "Forza Motorsport 4/Evolution",
                     "Evolution: open the next decade's events after a decade's championship and four other events (off = columns stay as they are)");
+REXCVAR_DEFINE_BOOL(fm4_evo_contract, true, "Forza Motorsport 4/Evolution",
+                    "Evolution: allow contract-out (pay a fee from future race earnings to skip a decade)");
 REXCVAR_DEFINE_BOOL(fm4_evo_hud, true, "Forza Motorsport 4/Evolution",
                     "Evolution: top-left progress readout (XP, level, one line per decade)");
+
+using PartTuneQueryFn = int (*)(const char* sql, double* out, int max_rows, int max_cols);
+void PartTuneSetQuery(PartTuneQueryFn fn);  // part_tune.cpp
+void EvoDbQueue(const char* sql);  // defined below, outside the anonymous namespace
+void ShopFilterInit();  // shop_filter.cpp: registers its per-frame tick (idempotent)
+void UsedLotOverlayDraw(ImGuiIO& io);  // used_lot_overlay.cpp
+void PartTuneSetPlayerGarage(int garage_id, const char* profile_prefix);
+bool PartTuneEnabled();
+bool PartWearEnabled();
 
 namespace {
 
@@ -531,13 +542,15 @@ bool EnsureScratch() {
 }
 
 // ---- Evolution mode: progress tracking, decade unlock, T3 XP log, HUD state -------------------------------------
-// Decade columns, 1960s-2020s, ten events each: decade d holds Events 2000+200*d .. 2009+200*d, the last one is the
-// decade's championship. The 1960s are always open; every later column ships locked (Level 99). Decade d+1 opens
-// (Level 0) when decade d is open, its championship is completed and at least four of its other nine events are
-// completed in the active profile; otherwise it is set back to 99. EvoTick does this through the game's database
+// Decade columns, 1960s-2020s, twenty events each: decade d holds Events 2000+200*d .. 2019+200*d, the last one is the
+// decade's gate championship. The 1960s are always open; every later column ships locked (Level 99). Decade d+1 opens
+// (Level 0) when decade d is open and either (its gate championship is completed and at least four of its other
+// eighteen events are completed in the active profile) or a contract-out was signed for it (see below); otherwise it
+// is set back to 99. Contract-out: the player pays Evolution_SkipFee(Decade) out of future earnings (the payout hook
+// calls EvoContractDeduct) instead of qualifying; one open contract at a time, kept in {P}Evolution_Contract. EvoTick does this through the game's database
 // layer. Events.Level is read by the Event List every time it is built, so the change shows the next time the list
 // opens. A decade with no events in the pack yet is skipped (placeholder events can be added later).
-constexpr int kEvoDecades = 7, kEvoFirstId = 2000, kEvoIdStride = 200, kEvoEventsPerDecade = 10;
+constexpr int kEvoDecades = 7, kEvoFirstId = 2000, kEvoIdStride = 200, kEvoEventsPerDecade = 20;
 constexpr int kEvoNeedOthers = 4, kEvoLockLevel = 99;
 int EvoFirstId(int d) { return kEvoFirstId + kEvoIdStride * d; }
 int EvoChampId(int d) { return EvoFirstId(d) + kEvoEventsPerDecade - 1; }
@@ -547,6 +560,8 @@ struct EvoHudState {
   uint32_t xp = 0, level = 0;  // Main/XP, Main/Level
   int others[kEvoDecades] = {};       // completed non-championship events per decade
   bool champ[kEvoDecades] = {};       // decade championship completed
+  bool skipped[kEvoDecades] = {};     // decade skipped through a contract-out
+  int owed = 0;                       // money still owed on the open contract (0 = none)
   int lock_level[kEvoDecades] = {};   // current Events.Level of each decade column (-1 not in the pack)
   int write = 0;               // 0 none, 1 unlock/relock written, 2 write FAILED
   uint32_t last_event = 0;     // last recorded race result
@@ -556,6 +571,8 @@ struct EvoHudState {
 };
 std::mutex g_evo_mu;
 EvoHudState g_evo;
+std::atomic<int> g_evo_contract_req{-1};     // decade to contract out of, set by EvoContractOut, consumed by EvoTick
+std::atomic<int> g_evo_contract_result{0};   // 0 none, 1 signed, 2 refused (last request)
 
 std::atomic<long long> g_evo_xp_note_ms{0};
 std::atomic<int> g_evo_xp_polls_done{3};
@@ -588,6 +605,25 @@ bool EvoTick(Guest& g, const char* why) {
   Db db(g);
   const std::string tbl = prefix + "Career_EventResults";
   const std::string done = " AND Place BETWEEN 1 AND 16";  // 17 = not every race of the event has a result
+  const std::string ctr = prefix + "Evolution_Contract";
+  db.Exec("CREATE TABLE IF NOT EXISTS " + ctr + " (Decade INTEGER PRIMARY KEY, Fee INTEGER, Owed INTEGER)");
+  st.owed = std::max(0, db.QueryInt("SELECT COALESCE(SUM(Owed),0) AS V FROM " + ctr, "V"));
+  const int req = g_evo_contract_req.exchange(-1);
+  if (req >= 0 && req < kEvoDecades - 1) {
+    // decade req may be skipped when it is open, not already skipped, nothing is owed, and the fee exists
+    const int fee = db.QueryInt("SELECT Fee AS V FROM Evolution_SkipFee WHERE Decade=" + std::to_string(req), "V");
+    const int have = db.QueryInt("SELECT COUNT(*) AS V FROM " + ctr + " WHERE Decade=" + std::to_string(req), "V");
+    const bool ok = g.ok() && REXCVAR_GET(fm4_evo_contract) && fee > 0 && have == 0 && st.owed == 0;
+    if (ok) {
+      db.Exec("INSERT INTO " + ctr + " (Decade, Fee, Owed) VALUES (" + std::to_string(req) + "," + std::to_string(fee) + "," +
+              std::to_string(fee) + ")");
+      st.owed = fee;
+    }
+    g_evo_contract_result = ok ? 1 : 2;
+    REXLOG_INFO("Evolution: contract-out of the {}s {} (fee {}, owed {})", 1960 + 10 * req, ok ? "SIGNED" : "refused", fee, st.owed);
+  }
+  for (int d = 0; d < kEvoDecades; ++d)
+    st.skipped[d] = db.QueryInt("SELECT COUNT(*) AS V FROM " + ctr + " WHERE Decade=" + std::to_string(d), "V") > 0;
   bool prev_open = true;  // the 1960s are always open
   int unlocked_through = 0;
   for (int d = 0; d < kEvoDecades; ++d) {
@@ -615,7 +651,7 @@ bool EvoTick(Guest& g, const char* why) {
     }
     if (want_open) unlocked_through = d;
     // decade d+1 may open only if decade d is open and qualifies
-    prev_open = want_open && st.champ[d] && st.others[d] >= kEvoNeedOthers;
+    prev_open = want_open && ((st.champ[d] && st.others[d] >= kEvoNeedOthers) || st.skipped[d]);
   }
   st.have = true;
   st.last_tick_ms = EvoNowMs();
@@ -666,6 +702,7 @@ class EvolutionHud : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    UsedLotOverlayDraw(io);  // before the HUD switch so it shows with the HUD hidden
     if (!REXCVAR_GET(fm4_evo_hud)) return;
     EvoHudState s;
     {
@@ -686,17 +723,18 @@ class EvolutionHud : public rex::ui::ImGuiDialog {
     } else {
       ImGui::Text("XP %u   Level %u", s.xp, s.level);
       for (int d = 0; d < kEvoDecades; ++d) {
-        const bool qualified = s.champ[d] && s.others[d] >= kEvoNeedOthers;
+        const bool qualified = (s.champ[d] && s.others[d] >= kEvoNeedOthers) || s.skipped[d];
         const bool open = s.lock_level[d] == 0;
         ImGui::TextColored(open ? (qualified ? ImVec4(0.55f, 0.95f, 0.55f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f))
                                 : ImVec4(1.0f, 0.45f, 0.4f, 1.0f),
                            "%ds: %s  %d/%d + champ %s", 1960 + 10 * d,
                            s.lock_level[d] < 0 ? "no events" : (open ? "OPEN" : "LOCKED"), s.others[d], kEvoNeedOthers,
-                           s.champ[d] ? "done" : "-");
+                           s.skipped[d] ? "skipped" : (s.champ[d] ? "done" : "-"));
       }
       if (s.write == 2) ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.25f, 1.0f), "lock write FAILED (Events not writable?)");
       else if (s.write == 1) ImGui::TextDisabled("lock written this session");
     }
+    if (s.have && s.owed > 0) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "contract: %d still owed (50%% of payouts)", s.owed);
     if (s.last_event) ImGui::Text("last result: event %u, place %d", s.last_event, s.last_place);
     ImGui::PopFont();
     ImGui::End();
@@ -985,6 +1023,106 @@ void EvoRunFrameCallbacks() {
   for (int i = 0; i < n; ++i) cbs[i]();
 }
 
+// ---- Part tuning data (part_tune.cpp) ---------------------------------------------------------------------------
+// part_tune.cpp asks for the player's garage row through a synchronous row reader called from the physics hook, where
+// no guest registers (and so no Db) exist. So the row is read here, on the frame hook, about once a second and when the
+// car changes, and cached; PartTuneQueryCached below answers from the cache. The Db getter only returns integers, so
+// decimals are scaled in SQL (x1000) and divided back. Any failure leaves the cache invalid and the reader returns -1.
+// Query A columns (plain integers): cooling Level, DistanceDriven, CurOwnerNumRaces, NumOwners, TotalRepairs, RedlineRPM.
+// Query B columns (x1000): fuel/cam size ratio, fuel low/mid/high bias. Needs the pack's Evolution_PartTune table.
+struct PartTuneCache {
+  bool a_ok = false, b_ok = false;
+  double a[6] = {}, b[4] = {};
+};
+std::mutex g_ptune_mu;
+PartTuneCache g_ptune;
+int g_ptune_frame = 0;
+int g_ptune_garage = 0;
+std::string g_ptune_prefix;
+
+void PartTunePump(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  if (!EvoEnabled() || g_faulted) return;
+  if (!PartTuneEnabled() && !PartWearEnabled()) return;
+  if ((++g_ptune_frame % 120) != 1) return;
+  if (!EnsureScratch()) return;
+  Guest g(r1, r13, fpscr);
+  const uint32_t data = ProfileData(g);
+  const uint32_t profile = data ? g.Call(kFnGetProfile, Load32(kProfileMgrGlobal)) : 0;
+  const std::string prefix = (g.ok() && profile) ? ProfilePrefix(profile) : std::string();
+  if (!g.ok()) { g_faulted = true; return; }
+  if (prefix.empty()) return;
+  const uint32_t career_car = GetSetting(g, data, "Main/CareerCar");
+  if (!g.ok()) { g_faulted = true; return; }
+  Db db(g);
+  const std::string cc = std::to_string(career_car);
+  const std::string garage_tbl = prefix + "Career_Garage";
+  // Main/CareerCar is unverified as a garage Id or a car Id: a garage row with that Id wins (same order as
+  // AffinityLevelUp), else the first garage row owning that car.
+  int garage = db.QueryInt("SELECT Id AS V FROM " + garage_tbl + " WHERE Id=" + cc, "V");
+  const char* how = "garage Id";
+  if (garage <= 0) {
+    garage = db.QueryInt("SELECT Id AS V FROM " + garage_tbl + " WHERE CarId=" + cc + " ORDER BY Id LIMIT 1", "V");
+    how = "car Id";
+  }
+  if (!g.ok()) { g_faulted = true; return; }
+  if (garage <= 0) {
+    std::lock_guard<std::mutex> lock(g_ptune_mu);
+    g_ptune = PartTuneCache();
+    if (g_ptune_garage != 0) REXLOG_INFO("Evolution part tuning: Main/CareerCar={} matches no garage row", career_car);
+    g_ptune_garage = 0;
+    return;
+  }
+  if (garage != g_ptune_garage || prefix != g_ptune_prefix) {
+    REXLOG_INFO("Evolution part tuning: Main/CareerCar={} -> Career_Garage.Id {} (matched as {})", career_car, garage, how);
+    g_ptune_garage = garage;
+    g_ptune_prefix = prefix;
+    PartTuneSetPlayerGarage(garage, prefix.c_str());
+  }
+  const std::string gid = std::to_string(garage);
+  PartTuneCache c;
+  {
+    const uint32_t q = db.Open(
+        "SELECT CAST(COALESCE(o.Level,0) AS INTEGER) AS C0, CAST(COALESCE(g.DistanceDriven,0) AS INTEGER) AS C1, "
+        "CAST(COALESCE(g.CurOwnerNumRaces,0) AS INTEGER) AS C2, CAST(COALESCE(g.NumOwners,0) AS INTEGER) AS C3, "
+        "CAST(COALESCE(g.TotalRepairs,0) AS INTEGER) AS C4, CAST(COALESCE(cam.RedlineRPM,0) AS INTEGER) AS C5 FROM " +
+        garage_tbl + " g LEFT JOIN List_UpgradeEngineOilCooling o ON o.Id=g.OilCooling "
+        "LEFT JOIN List_UpgradeEngineCamshaft cam ON cam.Id=g.Camshaft WHERE g.Id=" + gid);
+    if (q) {
+      if (!db.AtEnd(q)) {
+        for (int i = 0; i < 6; ++i) c.a[i] = db.GetInt(q, "C" + std::to_string(i));
+        c.a_ok = true;
+      }
+      db.Close(q);
+    }
+  }
+  if (!g.ok()) { g_faulted = true; return; }
+  {
+    const uint32_t q = db.Open(
+        "SELECT CAST(COALESCE(f.Size,0)*1000/MAX(COALESCE(ca.Size,0),0.0001) AS INTEGER) AS C0, "
+        "CAST(COALESCE(f.LowBias,0)*1000 AS INTEGER) AS C1, CAST(COALESCE(f.MidBias,0)*1000 AS INTEGER) AS C2, "
+        "CAST(COALESCE(f.HighBias,0)*1000 AS INTEGER) AS C3 FROM " + garage_tbl + " g "
+        "LEFT JOIN Evolution_PartTune f ON f.PartEnum=16 AND f.PartId=g.FuelSystem "
+        "LEFT JOIN Evolution_PartTune ca ON ca.PartEnum=12 AND ca.PartId=g.Camshaft WHERE g.Id=" + gid);
+    if (q) {
+      if (!db.AtEnd(q)) {
+        for (int i = 0; i < 4; ++i) c.b[i] = db.GetInt(q, "C" + std::to_string(i)) / 1000.0;
+        c.b_ok = true;
+      }
+      db.Close(q);
+    }
+  }
+  if (!g.ok()) { g_faulted = true; return; }
+  static bool logged_state = false;
+  if (!logged_state || c.a_ok != g_ptune.a_ok || c.b_ok != g_ptune.b_ok) {
+    logged_state = true;
+    REXLOG_INFO("Evolution part tuning: garage {} row {} (cooling {} dist {} races {} owners {} repairs {} redline {}); "
+                "Evolution_PartTune {} (size ratio {:.3f} bias {:.3f}/{:.3f}/{:.3f})", garage, c.a_ok ? "read" : "NOT READ",
+                c.a[0], c.a[1], c.a[2], c.a[3], c.a[4], c.a[5], c.b_ok ? "read" : "NOT READ", c.b[0], c.b[1], c.b[2], c.b[3]);
+  }
+  std::lock_guard<std::mutex> lock(g_ptune_mu);
+  g_ptune = c;
+}
+
 }  // namespace
 
 bool EvoUnlockEnabled() { return REXCVAR_GET(fm4_evo_unlock); }  // mods_menu.cpp: Evolution decade unlock switch
@@ -997,6 +1135,44 @@ int EvoNewestUnlockedDecadeYear() {
     for (int d = 0; d < kEvoDecades; ++d)
       if (g_evo.lock_level[d] == 0) newest = d;
   return 1960 + 10 * newest;
+}
+// Part tuning (part_tune.cpp) row reader, called from the physics hook. Answers from the cache PartTunePump fills; the
+// SQL text only selects which cached query is meant. Returns rows read (0 or 1) or -1 when there is no usable cache.
+int PartTuneQueryCached(const char* sql, double* out, int max_rows, int max_cols) {
+  if (!sql || !out || max_rows < 1) return -1;
+  std::lock_guard<std::mutex> lock(g_ptune_mu);
+  if (std::strstr(sql, "RedlineRPM")) {
+    if (!g_ptune.a_ok || max_cols < 6) return -1;
+    for (int i = 0; i < 6; ++i) out[i] = g_ptune.a[i];
+    return 1;
+  }
+  if (std::strstr(sql, "Evolution_PartTune")) {
+    if (!g_ptune.b_ok || max_cols < 4) return -1;
+    for (int i = 0; i < 4; ++i) out[i] = g_ptune.b[i];
+    return 1;
+  }
+  return -1;
+}
+bool EvoContractEnabled() { return REXCVAR_GET(fm4_evo_contract); }  // mods_menu.cpp: contract-out switch
+void EvoContractSetEnabled(bool on) { REXCVAR_SET(fm4_evo_contract, on); }
+// mods_menu.cpp / event list: ask to skip decade d (0 = the 1960s ... 5 = the 2010s). Takes effect on the next tick (a few
+// seconds); EvoContractLastResult() then reports 1 signed / 2 refused. Refused when disabled, already skipped, or in debt.
+void EvoContractOut(int decade) { if (REXCVAR_GET(fm4_evo_contract)) { g_evo_contract_result = 0; g_evo_contract_req = decade; } }
+int EvoContractLastResult() { return g_evo_contract_result.load(); }
+int EvoContractOwed() { std::lock_guard<std::mutex> lock(g_evo_mu); return g_evo.owed; }
+// Payout hook: call with the prize money about to be paid; returns the part to withhold (50%, capped at what is owed)
+// and queues the ledger update. Call on the game thread; returns 0 when disabled or nothing is owed.
+int EvoContractDeduct(int payout) {
+  if (payout <= 0 || !REXCVAR_GET(fm4_evo_contract)) return 0;
+  int cut = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_evo_mu);
+    cut = std::min(g_evo.owed, payout / 2);
+    if (cut <= 0) return 0;
+    g_evo.owed -= cut;
+  }
+  EvoDbQueue(("UPDATE {P}Evolution_Contract SET Owed=MAX(0,Owed-" + std::to_string(cut) + ") WHERE Owed>0").c_str());
+  return cut;
 }
 bool EvoHudVisible() { return REXCVAR_GET(fm4_evo_hud); }  // mods_menu.cpp: Evolution HUD switch
 void EvoHudSetVisible(bool on) { REXCVAR_SET(fm4_evo_hud, on); }
@@ -1058,8 +1234,13 @@ void DevKeysEventHighlighted(PPCRegister& r3) {
 
 // 0x822F787C, main game loop, once per frame.
 void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  static const bool shop_filter_init = (ShopFilterInit(), true);
+  (void)shop_filter_init;
+  static const bool part_tune_query_set = (PartTuneSetQuery(PartTuneQueryCached), true);
+  (void)part_tune_query_set;
   EvoPoll(r1, r13, fpscr);
   EvoDbPump(r1, r13, fpscr);
+  PartTunePump(r1, r13, fpscr);
   EvoRunFrameCallbacks();
   EvoIntroPoll(r1, r13, fpscr);
   if (!DevKeysEnabled()) return;

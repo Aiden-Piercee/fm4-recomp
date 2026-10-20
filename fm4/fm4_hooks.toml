@@ -871,3 +871,18 @@ registers = ["r3"]
 name = "SellValueResult"
 address = 0x82409554
 registers = ["r1", "r31"]
+
+# Used lot purchase (used_lot.cpp): purchase function sub_82433230, at loc_824332D8. The car was just added to the
+# garage (credits checked, not yet debited); r31 = the bought car id. Takes the listing out of the lot.
+[[midasm_hook]]
+name = "UsedLotBought"
+address = 0x824332D8
+registers = ["r31"]
+
+# Evolution contract-out (hooks.cpp ContractPayoutDeduct): sub_8249CE20 credits a race result, "add r4,r3,r11"
+# at 0x8249CE60 adds r11 = [r29+84] (race winnings) to the current credits before SetCredits 0x82405FC0.
+# The handler lowers r11 by the contract cut for Evolution events only.
+[[midasm_hook]]
+name = "ContractPayoutDeduct"
+address = 0x8249CE60
+registers = ["r11", "r29"]

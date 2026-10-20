@@ -866,6 +866,30 @@ void SellValueResult(PPCRegister& r1, PPCRegister& r31) {
   }
 }
 
+// Evolution contract-out: part of an Evolution race's winnings pays off the decade skip fee.
+// sub_8249CE20 (r3 = race result, r4 = profile) credits a result once: at 0x8249CE5C r11 = [result+84] (the race
+// winnings, unsigned 32-bit), at 0x8249CE60 "add r4,r3,r11" adds them to the current credits, and SetCredits
+// (0x82405FC0) follows. Stats (Main/TotalWinnings) still read the gross [result+84] afterwards. The current event
+// id is the word race start (sub_82492210) stores at 0x82DDB228. Only Evolution events (2000-3399) are touched;
+// EvoContractDeduct (dev_keys.cpp) returns 0 when fm4_evo_contract is off or nothing is owed.
+int EvoContractDeduct(int payout);  // dev_keys.cpp
+
+constexpr uint32_t kCurrentEventIdAddr = 0x82DDB228;
+
+void ContractPayoutDeduct(PPCRegister& r11, PPCRegister& r29) {
+  if (!PrizeEvoMode()) return;
+  const uint32_t event_id = LoadBE32(kCurrentEventIdAddr);
+  if (!IsEvolutionEvent(event_id)) return;
+  const uint32_t winnings = r11.u32;
+  if (winnings == 0 || winnings > 0x7FFFFFFFu) return;
+  const int cut = EvoContractDeduct(int(winnings));
+  static int logged = 0, logged_cut = 0;
+  if (logged++ < 5 || (cut > 0 && logged_cut++ < 20))
+    REXLOG_INFO("Evolution contract: event {} winnings {} -> contract cut {} (result {:08X})", event_id, winnings, cut,
+                r29.u32);
+  if (cut > 0 && uint32_t(cut) <= winnings) r11.u64 = winnings - uint32_t(cut);
+}
+
 // 0x82449454 / 0x82449470: reward title = string "IDS_GiftCarTitle_<level>"
 // from table "GiftCarTitles". For a prize level use the event's name
 // ("IDS_Name_<EventId>" in table "Events").

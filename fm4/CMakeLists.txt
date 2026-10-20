@@ -22,6 +22,9 @@ set(FM4_SOURCES
     src/garage_menu.cpp
     src/part_tune.cpp
     src/used_lot.cpp
+    src/used_lot_names.cpp
+    src/shop_filter.cpp
+    src/used_lot_overlay.cpp
     src/staggered_wheels.cpp
     src/rim_picker.cpp
     src/d3d_probe.cpp
