@@ -301,6 +301,12 @@ uint32_t GuestConstString(uint32_t& slot, const char* text) {
 //    if the make has none, the event's own car.
 // Only installed and owned cars are returned.
 std::string PrizeIdsSelect(uint32_t ev, uint32_t seed) {
+  // Evolution fork: the 1964 GT Championship (2009) pays a car from the era race-car pool
+  // (docs/evolution slice framework, section 8.5). The callers pick one row with the event's seed and
+  // keep only installed and owned cars.
+  if (ev == 2009)
+    return "SELECT Id AS Id FROM Data_Car WHERE Year<=1969 AND (ClassID>=5 OR BaseCost>=1000000)"
+           " AND Id IN (1301,1154,1386,249,1155,355,252,306)";
   const std::string e = std::to_string(ev);
   const std::string count = "(SELECT COUNT(DISTINCT Ordinal) FROM EventParticipants WHERE EventID=" + e + ")";
   const std::string event_car = "(SELECT MIN(Ordinal) FROM EventParticipants WHERE EventID=" + e + ")";
@@ -343,14 +349,18 @@ bool PrizeHasPending() {
 }
 }  // namespace
 
+void EvoNoteRaceResult();  // dev_keys.cpp: Evolution T3 XP log
+
 // 0x8248CA30 (cmpw cr6,r25,r3): existing event row. r3 = stored place,
 // r25 = new place (17 = not every race has a result), [r30+8] = EventId.
 void PrizeCarEventPlaceUpdate(PPCRegister& r3, PPCRegister& r25, PPCRegister& r30) {
+  EvoNoteRaceResult();
   if (r3.s32 > 16 && r25.s32 >= 1 && r25.s32 <= 16) PrizeEventCompleted(LoadBE32(r30.u32 + 8));
 }
 
 // 0x8248CAB0: first result row for the event (single-race events finish here).
 void PrizeCarEventPlaceInsert(PPCRegister& r25, PPCRegister& r30) {
+  EvoNoteRaceResult();
   if (r25.s32 >= 1 && r25.s32 <= 16) PrizeEventCompleted(LoadBE32(r30.u32 + 8));
 }
 
@@ -737,7 +747,21 @@ bool FixOn(const char* name) {
 // 0x823EA5E0 (after "stw r30,1724(r31)", end of the options-object constructor).
 void MaxCarsOptions(PPCRegister& r31) {
   const int n = MaxCarsOverride();
-  if (!n || !r31.u32) return;
+  if (!r31.u32) return;
+  if (!n) {
+    // Evolution fork: AI cars default 11 -> 15 (16 cars in total, the stock engine cap) without a launch flag.
+    // FM4_EVO_MAXAI=<11..15> overrides (11 = stock). Free Play (NumQuickRaceAICars) stays at stock.
+    static const int ai = [] {
+      const char* v = std::getenv("FM4_EVO_MAXAI");
+      const int x = (v && v[0]) ? std::atoi(v) : 15;
+      return x < 11 ? 11 : x > 15 ? 15 : x;
+    }();
+    if (ai != 11 && !MaxCarsSkip("maxaicars")) {
+      StoreBE32(r31.u32 + 1312, uint32_t(ai));  // maxaicars
+      REXLOG_INFO("Evolution: maxaicars default {} (stock 11)", ai);
+    }
+    return;
+  }
   if (!MaxCarsSkip("maxcars")) StoreBE32(r31.u32 + 1308, uint32_t(n));      // maxcars
   if (!MaxCarsSkip("maxaicars")) StoreBE32(r31.u32 + 1312, uint32_t(n - 1));  // maxaicars
   if (!MaxCarsSkip("unified")) StoreBE32(r31.u32 + 1316, uint32_t(n));      // maxcarstoloadunified

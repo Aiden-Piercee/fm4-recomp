@@ -64,6 +64,7 @@ constexpr int VK_SHIFT = 0x10, VK_F6 = 0x75, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -513,6 +514,33 @@ bool EnsureScratch() {
   return true;
 }
 
+// Evolution T3 poll state (see EvoNoteRaceResult).
+std::atomic<long long> g_evo_xp_note_ms{0};
+std::atomic<int> g_evo_xp_polls_done{3};
+long long EvoNowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+void EvoXpPoll(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  static const bool enabled = [] {
+    const char* v = std::getenv("FM4_EVO_XP_LOG");
+    return !(v && v[0] == '0');
+  }();
+  const int done = g_evo_xp_polls_done.load();
+  if (!enabled || done >= 3 || g_faulted) return;
+  static const long long kDelayMs[3] = {2000, 6000, 15000};
+  const long long note = g_evo_xp_note_ms.load();
+  if (!note || EvoNowMs() - note < kDelayMs[done]) return;
+  g_evo_xp_polls_done = done + 1;
+  if (!EnsureScratch()) return;
+  Guest g(r1, r13, fpscr);
+  const uint32_t data = ProfileData(g);
+  if (!data) return;
+  const uint32_t xp = GetSetting(g, data, "Main/XP");
+  const uint32_t level = GetSetting(g, data, "Main/Level");
+  if (!g.ok()) { g_faulted = true; return; }
+  REXLOG_INFO("Evolution T3: {} s after the race result, Main/XP={} Main/Level={}", kDelayMs[done] / 1000, xp, level);
+}
+
 }  // namespace
 
 // 0x824F4344, Event List selection-changed handler: r3 = highlighted EventId.
@@ -536,6 +564,7 @@ void DevKeysEventHighlighted(PPCRegister& r3) {
 
 // 0x822F787C, main game loop, once per frame.
 void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  EvoXpPoll(r1, r13, fpscr);
   if (!DevKeysEnabled()) return;
   static bool announced = false;
   if (!announced) {
@@ -602,4 +631,13 @@ void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
     REXLOG_INFO("Dev keys: F10 reset event {} {}", event_id, ok ? "done" : "FAILED");
     Beep(ok);
   }
+}
+
+// Evolution fork, test T3 (XP per race). A race result was just recorded (called from the existing prize-car
+// hooks 0x8248CA30 / 0x8248CAB0, so no new hook entry). The post-race XP write happens a little later, so
+// DevKeysFrame logs Main/XP + Main/Level 2, 6 and 15 s after the last result; the XP of a race is the
+// difference between the settled values of consecutive races. FM4_EVO_XP_LOG=0 disables.
+void EvoNoteRaceResult() {
+  g_evo_xp_note_ms = EvoNowMs();
+  g_evo_xp_polls_done = 0;
 }
