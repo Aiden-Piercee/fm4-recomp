@@ -1,4 +1,6 @@
-# Forza Motorsport 4 Recompiled - The road to 4k60 - This project adheres strictly to a native-execution rendering approach. Rather than rewriting or substituting graphics logic, performance enhancements focus exclusively on execution cadence and timing rather than pipeline modification. By leaving the original Xbox 360 rendering path intact, in theory the engine should modern performance scaling whilst completely avoiding the visual glitches, material corruption, and lighting anomalies typically introduced by aggressive graphics rewrites / emulation patches. 
+# Forza Motorsport 4 Recompiled - The road to 4k60 
+
+This project adheres strictly to a native-execution rendering approach. Rather than rewriting or substituting graphics logic, performance enhancements focus exclusively on execution cadence and timing rather than pipeline modification. By leaving the original Xbox 360 rendering path intact, in theory the engine should modern performance scaling whilst completely avoiding the visual glitches, material corruption, and lighting anomalies typically introduced by aggressive graphics rewrites / emulation patches. 
 
 There is also a non-conventional, more aggressive performance fork for those with potato-hardware, to at least run the game a 720p30 with respectable frametimes. (Tested on a Ryzen 3 3100U with Vega Graphics).
 
