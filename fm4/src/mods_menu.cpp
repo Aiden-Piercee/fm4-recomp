@@ -300,8 +300,6 @@ bool ModsMenuInput(PPCRegister& r3) {
 
 // Localized-string GetText. True = we answered (r3 = UTF-16BE text).
 bool GarageMenuText(PPCRegister& r3);  // garage_menu.cpp: BRAND CENTRAL / USED CAR DEALERSHIP
-bool BuyStageUserEnabled();            // buy_stage.cpp: Buy Cars 3D stage toggle
-void BuyStageSetUserEnabled(bool on);
 bool GarageMenuUserEnabled();          // garage_menu.cpp: Brand Central / Used Car Dealership toggle
 void GarageMenuSetUserEnabled(bool on);
 bool EngineReliabilityEnabled();       // overheat.cpp: engine reliability toggle
@@ -490,7 +488,6 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
     const uint16_t pressed = PollPad();
     if ((pressed & kPadB) || ImGui::IsKeyPressed(ImGuiKey_Escape)) { CloseOverlay(); return; }
     if (pressed & (kPadLB | kPadRB)) tab_ ^= 1;
-    if (tab_ == 1 && (pressed & kPadA)) BuyStageSetUserEnabled(!BuyStageUserEnabled());
     if (!scan_.packs.empty()) {
       const int n = int(scan_.packs.size());
       if (pressed & kPadDown) { selected_ = (selected_ + 1) % n; scroll_to_selected_ = true; }
@@ -602,11 +599,6 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
   }
 
   void DrawFeatures() {
-    bool stage = BuyStageUserEnabled();
-    if (ImGui::Checkbox("Buy Cars 3D stage (background and car view; off = classic Buy Cars)", &stage))
-      BuyStageSetUserEnabled(stage);
-    ImGui::TextDisabled("Applies the next time the car list opens. A on the pad also toggles it. "
-                        "F4 > Forza Motorsport 4 > Buy Cars > Save to config keeps it for next launch.");
     bool garage = GarageMenuUserEnabled();
     if (ImGui::Checkbox("Brand Central / Used Car Dealership in the CARS menu (off = stock Buy Cars; next menu open)", &garage))
       GarageMenuSetUserEnabled(garage);

@@ -414,40 +414,24 @@ address = 0x82AA4750
 registers = ["r30"]
 after_instruction = true
 
-# Buy Cars on the main-menu stage (fm4/src/buy_stage.cpp, stage 1 spike).
-# CCarSelect setup (sub_824EF1E8), right after `li r4,3`: replace the screen
-# mode 3 (UI_NoCar) with the homespace mode (FM4_BUYCARS_STAGE_MODE, default 6).
+# Buy Cars list highlight tracker (fm4/src/buy_stage.cpp, used by the used lot status box).
+# CCarSelect setup (sub_824EF1E8), right after `li r4,3`: the list screen is opening.
 [[midasm_hook]]
 name = "BuyStageMode"
 address = 0x824EF21C
 registers = ["r4", "r31"]
 
-# Diagnostic: log SetCar (sub_824DEA38) calls while that list is open
-# (runs after the first instruction, so r12 = the caller).
-[[midasm_hook]]
-name = "BuyStageSetCar"
-address = 0x824DEA38
-registers = ["r3", "r4", "r12"]
-after_instruction = true
-
-# Buy Cars stage, stage 2 (fm4/src/buy_stage.cpp): show the highlighted car.
 # CCarSelect focus handler (sub_824FC670): r28 = highlighted car Id, r31 = screen.
 [[midasm_hook]]
 name = "BuyStageHighlight"
 address = 0x824FC6D0
 registers = ["r28", "r31"]
 
-# Main game loop, once per frame (the dev keys hook the instruction before).
-[[midasm_hook]]
-name = "BuyStageFrame"
-address = 0x822F7884
-registers = ["r1", "r13", "fpscr"]
-
-# Mode setter entry (sub_824FFA48): another screen opened, undo our stage changes.
+# Mode setter entry (sub_824FFA48): another screen opened, the buy list is closed.
 [[midasm_hook]]
 name = "BuyStageModeSet"
 address = 0x824FFA48
-registers = ["r4", "r1", "r13", "fpscr"]
+registers = ["r4"]
 
 # Attempt 3: log + skip bad slots in the sub_8284E708 destructor and dump the node (hooks.cpp).
 [[midasm_hook]]
@@ -560,19 +544,6 @@ registers = ["r31", "r1"]
 name = "MaxCarsR31ProbeD"
 address = 0x826994E8
 registers = ["r1", "r28"]
-
-# Buy Cars: colour screen (shown after choosing a car) uses the 3/4 camera instead of the rear view.
-[[midasm_hook]]
-name = "BuyStageColorInit"
-address = 0x8250BA70
-registers = ["r1", "r13", "fpscr"]
-
-# Buy Cars: EXPERIMENTAL direct buy on A (skips the colour screen). Returns true = skip the screen change.
-[[midasm_hook]]
-name = "BuyStageDirectBuy"
-address = 0x8250D200
-registers = ["r28", "r31", "r1", "r13", "fpscr"]
-jump_address_on_true = 0x8250D224
 
 # Attempt 3f: cap the list copy at 16 entries for the caller whose stack buffer holds 16 (hooks.cpp).
 [[midasm_hook]]
