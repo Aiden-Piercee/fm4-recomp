@@ -298,7 +298,33 @@ bool ModsMenuInput(PPCRegister& r3) {
 }
 
 // Localized-string GetText. True = we answered (r3 = UTF-16BE text).
+bool GarageMenuText(PPCRegister& r3);  // garage_menu.cpp: BRAND CENTRAL / USED CAR DEALERSHIP
+bool BuyStageUserEnabled();            // buy_stage.cpp: Buy Cars 3D stage toggle
+void BuyStageSetUserEnabled(bool on);
+bool GarageMenuUserEnabled();          // garage_menu.cpp: Brand Central / Used Car Dealership toggle
+void GarageMenuSetUserEnabled(bool on);
+bool EngineReliabilityEnabled();       // overheat.cpp: engine reliability toggle
+void EngineReliabilitySetEnabled(bool on);
+bool EvoUnlockEnabled();               // dev_keys.cpp: Evolution decade unlock + HUD switches
+void EvoUnlockSetEnabled(bool on);
+bool EvoHudVisible();
+void EvoHudSetVisible(bool on);
+bool PrizeNoLevelGiftsEnabled();       // hooks.cpp: Game Levelling switches
+void PrizeNoLevelGiftsSetEnabled(bool on);
+bool PrizeEventCarsEnabled();
+void PrizeEventCarsSetEnabled(bool on);
+bool PrizeMilestonesEnabled();
+void PrizeMilestonesSetEnabled(bool on);
+bool PrizeOnlyFilterEnabled();
+void PrizeOnlyFilterSetEnabled(bool on);
+bool PrizeNoSellEnabled();
+void PrizeNoSellSetEnabled(bool on);
+bool PartTuneEnabled();                // part_tune.cpp: Performance Parts switches
+void PartTuneSetEnabled(bool on);
+bool PartWearEnabled();
+void PartWearSetEnabled(bool on);
 bool ModsMenuText(PPCRegister& r3) {
+  if (GarageMenuText(r3)) return true;
   if (!g_scratch) return false;
   const uint32_t id = Load32(r3.u32 + 8);
   if (id < kTextIdBase || id >= kTextIdBase + kNumLabels) return false;
@@ -440,6 +466,7 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
     const uint16_t pressed = PollPad();
     if ((pressed & kPadB) || ImGui::IsKeyPressed(ImGuiKey_Escape)) { CloseOverlay(); return; }
     if (pressed & (kPadLB | kPadRB)) tab_ ^= 1;
+    if (tab_ == 1 && (pressed & kPadA)) BuyStageSetUserEnabled(!BuyStageUserEnabled());
     if (!scan_.packs.empty()) {
       const int n = int(scan_.packs.size());
       if (pressed & kPadDown) { selected_ = (selected_ + 1) % n; scroll_to_selected_ = true; }
@@ -460,7 +487,7 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
       ImGui::SameLine();
       if (ImGui::Button(tab_ == 1 ? "[ FEATURES ]" : "  FEATURES  ")) tab_ = 1;
       ImGui::SameLine();
-      ImGui::TextDisabled("   LB/RB switch tab   D-pad select   B / Esc close");
+      ImGui::TextDisabled("   LB/RB switch tab   D-pad select   A toggle (Features)   B / Esc close");
       ImGui::Separator();
       if (tab_ == 0) DrawPacks(size); else DrawFeatures();
       ImGui::PopFont();
@@ -471,7 +498,7 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
 
  private:
   static constexpr uint16_t kPadUp = 0x0001, kPadDown = 0x0002, kPadLB = 0x0100, kPadRB = 0x0200,
-                            kPadB = 0x2000;
+                            kPadA = 0x1000, kPadB = 0x2000;
 
   // Newly pressed pad buttons (any controller), XInput bit layout.
   uint16_t PollPad() {
@@ -551,6 +578,39 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
   }
 
   void DrawFeatures() {
+    bool stage = BuyStageUserEnabled();
+    if (ImGui::Checkbox("Buy Cars 3D stage (background and car view; off = classic Buy Cars)", &stage))
+      BuyStageSetUserEnabled(stage);
+    ImGui::TextDisabled("Applies the next time the car list opens. A on the pad also toggles it. "
+                        "F4 > Forza Motorsport 4 > Buy Cars > Save to config keeps it for next launch.");
+    bool garage = GarageMenuUserEnabled();
+    if (ImGui::Checkbox("Brand Central / Used Car Dealership in the CARS menu (off = stock Buy Cars; next menu open)", &garage))
+      GarageMenuSetUserEnabled(garage);
+    bool rel = EngineReliabilityEnabled();
+    if (ImGui::Checkbox("Engine reliability (heat, wear, faults; damage only in Simulation damage mode)", &rel))
+      EngineReliabilitySetEnabled(rel);
+    bool gifts = PrizeNoLevelGiftsEnabled();
+    if (ImGui::Checkbox("Evolution: no gift car on level-up (live)", &gifts)) PrizeNoLevelGiftsSetEnabled(gifts);
+    bool evcars = PrizeEventCarsEnabled();
+    if (ImGui::Checkbox("Evolution: prize car for completing an event (live)", &evcars)) PrizeEventCarsSetEnabled(evcars);
+    bool miles = PrizeMilestonesEnabled();
+    if (ImGui::Checkbox("Evolution: car at driver level 10/20/30/40/50 (live)", &miles)) PrizeMilestonesSetEnabled(miles);
+    bool pfilt = PrizeOnlyFilterEnabled();
+    if (ImGui::Checkbox("Evolution: hide prize-only works cars from Buy Cars / used lot (next list open)", &pfilt))
+      PrizeOnlyFilterSetEnabled(pfilt);
+    bool sell0 = PrizeNoSellEnabled();
+    if (ImGui::Checkbox("Evolution: prize cars and works variants sell for 0 credits (live)", &sell0)) PrizeNoSellSetEnabled(sell0);
+    bool ptune = PartTuneEnabled();
+    if (ImGui::Checkbox("Part tuning character (brand/size power-curve shape)", &ptune)) PartTuneSetEnabled(ptune);
+    bool pwear = PartWearEnabled();
+    if (ImGui::Checkbox("Engine wear (age/mileage power loss)", &pwear)) PartWearSetEnabled(pwear);
+    bool evo_unlock = EvoUnlockEnabled();
+    if (ImGui::Checkbox("Evolution decade unlock (next decade opens after a championship + 4 events; off = columns stay as they are)", &evo_unlock))
+      EvoUnlockSetEnabled(evo_unlock);
+    bool evo_hud = EvoHudVisible();
+    if (ImGui::Checkbox("Evolution HUD (top-left progress readout)", &evo_hud))
+      EvoHudSetVisible(evo_hud);
+    ImGui::Separator();
     ImGui::TextWrapped("Feature switches are environment variables read at startup "
                        "(set them in the launcher .bat). Shown here read-only.");
     ImGui::Separator();

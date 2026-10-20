@@ -218,8 +218,38 @@ void KeepEventGridSectionGaps(PPCRegister& r10, PPCRegister& r31) {
 #include <string>
 #include <cstring>
 #include <filesystem>
+#include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
+
+// Evolution prize switches: F4 > Forza Motorsport 4/Evolution prizes ("Save to config" keeps them in
+// fm4.toml) and the Mods menu FEATURES tab (getters/setters below). All default on and are read every
+// time the code runs, so a change applies from the next reward check or list open, no restart.
+REXCVAR_DEFINE_BOOL(fm4_evo_no_level_gifts, true, "Forza Motorsport 4/Evolution prizes",
+                    "Evolution: no stock driver-level gift car or 'choose a car' screen on level-up");
+REXCVAR_DEFINE_BOOL(fm4_evo_event_prize_cars, true, "Forza Motorsport 4/Evolution prizes",
+                    "Evolution: one random prize car for completing an event that has a prize pool");
+REXCVAR_DEFINE_BOOL(fm4_evo_milestone_cars, true, "Forza Motorsport 4/Evolution prizes",
+                    "Evolution: one random car at driver level 10, 20, 30, 40 and 50 (decade car or heritage classic)");
+REXCVAR_DEFINE_BOOL(fm4_evo_prize_only_filter, true, "Forza Motorsport 4/Evolution prizes",
+                    "Evolution: keep prize-only works variants out of Buy Cars and the used lot (next list open)");
+REXCVAR_DEFINE_BOOL(fm4_evo_no_sell_prize_cars, true, "Forza Motorsport 4/Evolution prizes",
+                    "Evolution: prize cars and works variants are worth 0 credits when sold (no money farming)");
+
+// Prize state store. EVO_DB_API 0 (default): pending prizes and milestone levels live in
+// fm4_prize_cars_pending.txt / fm4_prize_milestones.txt next to the exe, as before. EVO_DB_API 1: they
+// live in the profile's own table {P}Evolution_Prize through the Evolution DB helper (dev_keys.cpp;
+// {P} = the profile table prefix), the txt files are imported once and renamed to .imported, and
+// prize cars are remembered by garage Id so they can't be sold for money.
+#ifndef EVO_DB_API
+#define EVO_DB_API 0
+#endif
+#if EVO_DB_API
+void EvoDbQueue(const char* sql);
+void EvoDbRead(const char* sql, const char* const* column_names, int count, void (*cb)(const int32_t* values, int count));
+bool EvoProfileReady();
+uint32_t EvoProfileGeneration();
+#endif
 
 namespace {
 constexpr uint32_t kPrizeLevelBase = 10000;
@@ -248,13 +278,44 @@ bool PrizeCarsEnabled() {
   return enabled;
 }
 
+// Evolution mode, same switch as EvoEnabled() in dev_keys.cpp (FM4_EVO=0 turns it off).
+bool PrizeEvoMode() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("FM4_EVO");
+    return !(v && v[0] == '0');
+  }();
+  return enabled;
+}
+
+bool IsEvolutionEvent(uint32_t ev) { return ev >= 2000 && ev < 3400; }
+
+// Evolution level milestones (Level 10, 20, ... 50 = the turn of each decade): one random car,
+// given through the same pending-prize path as event prizes. A milestone is a fake event id
+// kMilestoneBase + level*10 + heritage (heritage 1 = a pre-1960 classic, 0 = a race car of the
+// newest open decade); heritage is rolled once, when the milestone is reached.
+constexpr uint32_t kMilestoneBase = 90000;
+constexpr uint32_t kMilestoneHeritagePercent = 25;
+bool IsMilestoneEvent(uint32_t ev) { return ev >= kMilestoneBase + 100 && ev <= kMilestoneBase + 501; }
+uint32_t MilestoneLevel(uint32_t ev) { return (ev - kMilestoneBase) / 10; }
+
 bool IsPrizeLevel(uint32_t level) { return level >= kPrizeLevelBase && level < kPrizeLevelBase + 100000; }
 
 std::filesystem::path PrizePendingPath() {
   return rex::filesystem::GetExecutableFolder() / "fm4_prize_cars_pending.txt";
 }
 
+std::set<uint32_t> g_prize_garage_ids;  // garage Ids of prize cars (sold for 0), EVO_DB_API only
+std::set<uint32_t> g_milestones_done;   // milestone levels already reached (each awarded once, ever)
+#if EVO_DB_API
+std::set<uint32_t> g_prize_given_events;  // events whose prize was already given or skipped (never again)
+bool PrizeDbSync();
+#endif
+
 void PrizeLoad() {
+#if EVO_DB_API
+  PrizeDbSync();
+  return;
+#endif
   if (g_prize_loaded) return;
   g_prize_loaded = true;
   std::ifstream in(PrizePendingPath());
@@ -270,8 +331,153 @@ void PrizeLoad() {
 }
 
 void PrizeSave() {
+  if (EVO_DB_API) return;  // the profile table is written at each change instead
   std::ofstream out(PrizePendingPath(), std::ios::trunc);
   for (const auto& [id, seed] : g_prize_pending) out << id << ' ' << seed << '\n';
+}
+
+uint32_t PrizeRandomSeed() {
+  static std::mt19937 rng{std::random_device{}()};
+  return std::uniform_int_distribution<uint32_t>(1, 100002)(rng);
+}
+
+// Milestone levels already reached: fm4_prize_milestones.txt next to the exe (one level per line,
+// written as soon as the milestone is queued), or the profile table with EVO_DB_API.
+bool g_milestones_loaded = false;
+
+std::filesystem::path MilestonesPath() {
+  return rex::filesystem::GetExecutableFolder() / "fm4_prize_milestones.txt";
+}
+
+#if EVO_DB_API
+// ---- profile-table store ----
+constexpr int kPrizeDbMaxRows = 64;  // prize budget is ~18 + 5 milestones; rows are read one by one
+constexpr const char* kPrizeTableSql =
+    "CREATE TABLE IF NOT EXISTS {P}Evolution_Prize(Source TEXT, SourceId INTEGER, Seed INTEGER, Kind TEXT,"
+    " GarageId INTEGER, CarId INTEGER, AwardedAt INTEGER, PRIMARY KEY(Source, SourceId))";
+uint32_t g_db_gen = 0;
+bool g_db_imported = false;
+
+std::string PrizeKey(uint32_t ev) {  // WHERE clause for a pending-map id (event id or milestone id)
+  return IsMilestoneEvent(ev) ? "Source='milestone' AND SourceId=" + std::to_string(MilestoneLevel(ev))
+                              : "Source='event' AND SourceId=" + std::to_string(ev);
+}
+
+void PrizeDbInsert(uint32_t ev, uint32_t seed, uint32_t awarded_at /* 0 = pending */) {
+  const bool m = IsMilestoneEvent(ev);
+  const std::string sql = "INSERT OR IGNORE INTO {P}Evolution_Prize(Source, SourceId, Seed, Kind, AwardedAt) VALUES('" +
+                          std::string(m ? "milestone" : "event") + "', " +
+                          std::to_string(m ? MilestoneLevel(ev) : ev) + ", " + std::to_string(seed) + ", " +
+                          (m ? (ev % 10 ? "'heritage'" : "'decade'") : "NULL") + ", " +
+                          (awarded_at ? std::to_string(awarded_at) : "NULL") + ")";
+  EvoDbQueue(sql.c_str());
+}
+
+// One row of {P}Evolution_Prize: S (1 = milestone), SourceId, Seed, G (garage Id or 0), Given, H (heritage).
+void PrizeDbRow(const int32_t* v, int n) {
+  if (n < 6) return;
+  std::lock_guard<std::recursive_mutex> lock(g_prize_mutex);
+  const uint32_t ev = v[0] ? kMilestoneBase + uint32_t(v[1]) * 10 + (v[5] ? 1 : 0) : uint32_t(v[1]);
+  if (v[0]) g_milestones_done.insert(uint32_t(v[1]));
+  if (!v[4]) g_prize_pending[ev] = v[2] ? uint32_t(v[2]) : 1;
+  else if (!v[0]) g_prize_given_events.insert(ev);
+  if (v[3] > 0) g_prize_garage_ids.insert(uint32_t(v[3]));
+}
+
+void PrizeDbGarageRow(const int32_t* v, int n) {
+  if (n < 1 || v[0] <= 0) return;
+  std::lock_guard<std::recursive_mutex> lock(g_prize_mutex);
+  g_prize_garage_ids.insert(uint32_t(v[0]));
+}
+
+// Once per run: move any old txt state into the profile table, then rename the files to .imported.
+void PrizeDbImportTxt() {
+  if (g_db_imported) return;
+  g_db_imported = true;
+  std::set<uint32_t> pending_milestones;
+  if (std::ifstream in{PrizePendingPath()}) {
+    std::string line;
+    while (std::getline(in, line)) {
+      std::istringstream f(line);
+      uint32_t id = 0, seed = 1;
+      if (!(f >> id)) continue;
+      f >> seed;
+      PrizeDbInsert(id, seed ? seed : 1, 0);
+      if (IsMilestoneEvent(id)) pending_milestones.insert(MilestoneLevel(id));
+    }
+  }
+  if (std::ifstream in{MilestonesPath()}) {
+    uint32_t level = 0;
+    while (in >> level)  // reached and not pending = already given (AwardedAt 1 = imported, time unknown)
+      if (!pending_milestones.count(level)) PrizeDbInsert(kMilestoneBase + level * 10, 1, 1);
+  }
+  for (const auto& p : {PrizePendingPath(), MilestonesPath()}) {
+    std::error_code ec;
+    if (std::filesystem::exists(p, ec)) {
+      std::filesystem::rename(p, std::filesystem::path(p).concat(".imported"), ec);
+      REXLOG_INFO("Prize cars: imported {} into the profile table{}", p.filename().string(), ec ? " (rename failed)" : "");
+    }
+  }
+}
+
+// Called before every use of the prize state: on a new profile load, clear the in-memory state and
+// read it back from the profile table (rows arrive through PrizeDbRow).
+bool PrizeDbSync() {
+  if (!EvoProfileReady()) return false;
+  const uint32_t gen = EvoProfileGeneration();
+  if (gen == g_db_gen) return true;
+  g_db_gen = gen;
+  g_prize_pending.clear();
+  g_milestones_done.clear();
+  g_prize_garage_ids.clear();
+  g_prize_given_events.clear();
+  EvoDbQueue(kPrizeTableSql);
+  PrizeDbImportTxt();
+  static const char* const kCols[] = {"S", "SourceId", "Seed", "G", "Given", "H"};
+  for (int i = 0; i < kPrizeDbMaxRows; ++i) {
+    const std::string sql =
+        "SELECT (Source='milestone') AS S, SourceId, COALESCE(Seed,1) AS Seed, COALESCE(GarageId,0) AS G,"
+        " (AwardedAt IS NOT NULL) AS Given, COALESCE(Kind='heritage',0) AS H FROM {P}Evolution_Prize"
+        " ORDER BY Source, SourceId LIMIT 1 OFFSET " + std::to_string(i);
+    EvoDbRead(sql.c_str(), kCols, 6, PrizeDbRow);
+  }
+  REXLOG_INFO("Prize cars: profile {} prize table loading", gen);
+  return true;
+}
+#endif
+
+void MilestonesLoad() {
+#if EVO_DB_API
+  PrizeDbSync();
+  return;
+#endif
+  if (g_milestones_loaded) return;
+  g_milestones_loaded = true;
+  std::ifstream in(MilestonesPath());
+  uint32_t level = 0;
+  while (in >> level) g_milestones_done.insert(level);
+}
+
+// Called with the player's current driver level when the reward queue is built: queue every
+// milestone up to that level that has not been reached before (a jump of several levels gets each).
+void MilestonesQueue(uint32_t level) {
+  MilestonesLoad();
+  bool added = false;
+  for (uint32_t m = 10; m <= 50 && m <= level; m += 10) {
+    if (!g_milestones_done.insert(m).second) continue;
+    const bool heritage = PrizeRandomSeed() % 100 < kMilestoneHeritagePercent;
+    const uint32_t ev = kMilestoneBase + m * 10 + (heritage ? 1 : 0), seed = PrizeRandomSeed();
+    g_prize_pending[ev] = seed;
+#if EVO_DB_API
+    PrizeDbInsert(ev, seed, 0);
+#endif
+    REXLOG_INFO("Prize cars: level {} milestone reached, {} car pending", m, heritage ? "heritage" : "decade");
+    added = true;
+  }
+  if (!added || EVO_DB_API) return;
+  PrizeSave();
+  std::ofstream out(MilestonesPath(), std::ios::trunc);
+  for (const uint32_t m : g_milestones_done) out << m << '\n';
 }
 
 uint32_t GuestAlloc(uint32_t size) { return REX_KERNEL_MEMORY()->SystemHeapAlloc(size); }
@@ -300,13 +506,87 @@ uint32_t GuestConstString(uint32_t& slot, const char* text) {
 //    undrivable cars), picked by `seed` so every query returns the same car;
 //    if the make has none, the event's own car.
 // Only installed and owned cars are returned.
+// Evolution events (2000-3399): the pool comes from Evolution_EventKind.PrizePool. A missing row
+// or 'none' gives an empty pool (no prize). The callers pick ONE row with the event's seed and keep
+// only installed and owned cars, so the player always gets one random car, never a choice.
+//  * era_race:  the decade's race cars + works variants, else its fastest third (DecadePoolSelect;
+//               1960s: the slice's hand-picked race cars + 1960s works variants);
+//  * trophy:    same make as the cup car, same class or one higher, no newer than the decade;
+//  * next_tier: a D-B road car of the next decade, once that decade's column is open (Level 0);
+//               until then, era_race;
+//  * heritage:  a pre-1960 classic.
+// The fastest third (by PerformanceIndex) of a decade's drivable, non-unicorn cars; `first_year`
+// is an SQL expression. Used instead of "race cars only" because some decades (the 1970s in the
+// base game) have no class A or higher car at all.
+std::string DecadeTopCarsSelect(const std::string& first_year) {
+  const std::string in_decade = ".Year BETWEEN (" + first_year + ") AND (" + first_year + ")+9";
+  return "SELECT c.Id AS Id FROM Data_Car AS c WHERE c" + in_decade +
+         " AND c.IsUnicorn=0 AND c.IsDrivable=1 AND IsCarInstalledAndPurchased(c.Id) AND 3*(SELECT COUNT(*)"
+         " FROM Data_Car AS x WHERE x" + in_decade + " AND x.IsUnicorn=0 AND x.IsDrivable=1"
+         " AND x.PerformanceIndex>c.PerformanceIndex)<(SELECT COUNT(*) FROM Data_Car AS x WHERE x" + in_decade +
+         " AND x.IsUnicorn=0 AND x.IsDrivable=1)";
+}
+
+// Works variants (race-spec, prize-only clones; pack data from _claude_stage\evo-works-variants) live in a
+// reserved Data_Car id block. PROVISIONAL until the period-variants id registry is final. The block is
+// used instead of the Evolution_PrizeOnlyCars table: these queries run inside the game's own SQL, where a
+// reference to a table the installed pack doesn't have fails the whole query.
+constexpr uint32_t kWorksCarFirst = 12800, kWorksCarLast = 12899;
+const std::string kWorksCarIds = "BETWEEN " + std::to_string(kWorksCarFirst) + " AND " + std::to_string(kWorksCarLast);
+
+// A decade's prize pool: its real race cars (class A or higher, or worth 1M+) plus its works variants;
+// when it has neither, the fastest third of its cars. `first_year` is an SQL expression.
+std::string DecadePoolSelect(const std::string& first_year) {
+  const std::string race =
+      "SELECT Id FROM Data_Car WHERE Year BETWEEN (" + first_year + ") AND (" + first_year + ")+9"
+      " AND (ClassID>=5 OR BaseCost>=1000000 OR Id " + kWorksCarIds + ")"
+      " AND IsUnicorn=0 AND IsDrivable=1 AND IsCarInstalledAndPurchased(Id)";
+  return race + " UNION ALL SELECT Id FROM (" + DecadeTopCarsSelect(first_year) + ") WHERE NOT EXISTS (" + race + ")";
+}
+
+// The 1960s pool: the slice's hand-picked race cars plus any 1960s works variants.
+const std::string kSixtiesPoolSelect =
+    "SELECT Id FROM Data_Car WHERE ((Year<=1969 AND (ClassID>=5 OR BaseCost>=1000000)"
+    " AND Id IN (1301,1154,1386,249,1155,355,252,306)) OR (Id " + kWorksCarIds + " AND Year BETWEEN 1960 AND 1969))"
+    " AND IsCarInstalledAndPurchased(Id)";
+
+std::string EvolutionPrizeIdsSelect(uint32_t ev) {
+  const std::string e = std::to_string(ev);
+  const uint32_t decade = (ev - 2000) / 200;
+  const uint32_t lo = 1960 + 10 * decade, next_base = 2000 + 200 * (decade + 1);
+  const std::string next_yr = " BETWEEN " + std::to_string(lo + 10) + " AND " + std::to_string(lo + 19);
+  const std::string kind = "(SELECT PrizePool FROM Evolution_EventKind WHERE EventId=" + e + ")";
+  const std::string usable = " AND IsUnicorn=0 AND IsDrivable=1 AND IsCarInstalledAndPurchased(Id)";
+  const std::string next_open = "EXISTS (SELECT 1 FROM Events WHERE Id BETWEEN " + std::to_string(next_base) +
+                                " AND " + std::to_string(next_base + 9) + " AND Level=0)";
+  const std::string era = decade == 0 ? kSixtiesPoolSelect : DecadePoolSelect(std::to_string(lo));
+  const std::string event_car = "(SELECT MIN(Ordinal) FROM EventParticipants WHERE EventID=" + e + ")";
+  return
+      "SELECT Id FROM (" + era + ") WHERE (" + kind + "='era_race' OR (" + kind +
+      "='next_tier' AND NOT " + next_open + "))"
+      " UNION ALL SELECT Id FROM Data_Car WHERE Year" + next_yr + " AND ClassID BETWEEN 2 AND 4" + usable +
+      " AND " + kind + "='next_tier' AND " + next_open +
+      " UNION ALL SELECT o.Id AS Id FROM Data_Car AS o, Data_Car AS ev WHERE ev.Id=" + event_car +
+      " AND o.MakeID=ev.MakeID AND o.ClassID IN (ev.ClassID, ev.ClassID+1) AND o.Id<>ev.Id AND o.Year<=" +
+      std::to_string(lo + 9) + " AND o.IsUnicorn=0 AND o.IsDrivable=1 AND IsCarInstalledAndPurchased(o.Id) AND " +
+      kind + "='trophy'"
+      " UNION ALL SELECT Id FROM Data_Car WHERE Year<1960" + usable + " AND " + kind + "='heritage'";
+}
+
+// Level milestone pool: a pre-1960 classic, or the era_race pool of the newest decade whose column
+// is open (Level 0).
+std::string MilestonePrizeIdsSelect(uint32_t ev) {
+  if (ev % 10 == 1)
+    return "SELECT Id FROM Data_Car WHERE Year<1960 AND IsUnicorn=0 AND IsDrivable=1 AND IsCarInstalledAndPurchased(Id)";
+  const std::string d = "(SELECT COALESCE(MAX((Id-2000)/200),0) FROM Events WHERE Id BETWEEN 2000 AND 3399"
+                        " AND (Id-2000)%200<10 AND Level=0)";
+  return "SELECT Id FROM (" + kSixtiesPoolSelect + ") WHERE " + d + "=0"
+         " UNION ALL SELECT Id FROM (" + DecadePoolSelect("1960+10*" + d) + ") WHERE " + d + ">0";
+}
+
 std::string PrizeIdsSelect(uint32_t ev, uint32_t seed) {
-  // Evolution fork: the 1964 GT Championship (2009) pays a car from the era race-car pool
-  // (docs/evolution slice framework, section 8.5). The callers pick one row with the event's seed and
-  // keep only installed and owned cars.
-  if (ev == 2009)
-    return "SELECT Id AS Id FROM Data_Car WHERE Year<=1969 AND (ClassID>=5 OR BaseCost>=1000000)"
-           " AND Id IN (1301,1154,1386,249,1155,355,252,306)";
+  if (IsMilestoneEvent(ev)) return MilestonePrizeIdsSelect(ev);
+  if (PrizeEvoMode() && IsEvolutionEvent(ev)) return EvolutionPrizeIdsSelect(ev);
   const std::string e = std::to_string(ev);
   const std::string count = "(SELECT COUNT(DISTINCT Ordinal) FROM EventParticipants WHERE EventID=" + e + ")";
   const std::string event_car = "(SELECT MIN(Ordinal) FROM EventParticipants WHERE EventID=" + e + ")";
@@ -331,11 +611,18 @@ std::string PrizeIdsSelect(uint32_t ev, uint32_t seed) {
 
 void PrizeEventCompleted(uint32_t event_id) {
   if (!PrizeCarsEnabled()) return;
+  if (PrizeEvoMode() && !REXCVAR_GET(fm4_evo_event_prize_cars)) return;
   std::lock_guard<std::recursive_mutex> lock(g_prize_mutex);
   PrizeLoad();
+#if EVO_DB_API
+  if (g_prize_given_events.count(event_id)) return;  // one prize per event, ever
+#endif
   if (!g_prize_pending.count(event_id)) {
     static std::mt19937 rng{std::random_device{}()};
     g_prize_pending[event_id] = std::uniform_int_distribution<uint32_t>(1, 100002)(rng);
+#if EVO_DB_API
+    PrizeDbInsert(event_id, g_prize_pending[event_id], 0);
+#endif
     PrizeSave();
     REXLOG_INFO("Prize cars: event {} completed, prize pending", event_id);
   }
@@ -348,6 +635,18 @@ bool PrizeHasPending() {
   return !g_prize_pending.empty();
 }
 }  // namespace
+
+// Mods menu FEATURES tab (mods_menu.cpp) toggles for the Evolution prize switches above.
+bool PrizeNoLevelGiftsEnabled() { return REXCVAR_GET(fm4_evo_no_level_gifts); }
+void PrizeNoLevelGiftsSetEnabled(bool on) { REXCVAR_SET(fm4_evo_no_level_gifts, on); }
+bool PrizeEventCarsEnabled() { return REXCVAR_GET(fm4_evo_event_prize_cars); }
+void PrizeEventCarsSetEnabled(bool on) { REXCVAR_SET(fm4_evo_event_prize_cars, on); }
+bool PrizeMilestonesEnabled() { return REXCVAR_GET(fm4_evo_milestone_cars); }
+void PrizeMilestonesSetEnabled(bool on) { REXCVAR_SET(fm4_evo_milestone_cars, on); }
+bool PrizeOnlyFilterEnabled() { return REXCVAR_GET(fm4_evo_prize_only_filter); }
+void PrizeOnlyFilterSetEnabled(bool on) { REXCVAR_SET(fm4_evo_prize_only_filter, on); }
+bool PrizeNoSellEnabled() { return REXCVAR_GET(fm4_evo_no_sell_prize_cars); }
+void PrizeNoSellSetEnabled(bool on) { REXCVAR_SET(fm4_evo_no_sell_prize_cars, on); }
 
 void EvoNoteRaceResult(uint32_t event_id, int place);  // dev_keys.cpp: Evolution tracking
 
@@ -379,19 +678,24 @@ void PrizeCarCaptureRange(PPCRegister& r5, PPCRegister& r6, PPCRegister& r12) {
 }
 
 // 0x82449630: r5 = the formatted query (a 384-byte stack buffer). Point it at
-// our own query: the stock rows plus each pending event's pool.
+// our own query: the stock rows plus each pending event's pool. In Evolution
+// mode the stock driver-level gift rows are always dropped (no level-up gift
+// car or "choose a car" screen, whatever gamedb is live): only event prizes.
 void PrizeCarSwapQuery(PPCRegister& r5) {
   if (!g_prize_range_ok) return;
   g_prize_range_ok = false;
   std::lock_guard<std::recursive_mutex> lock(g_prize_mutex);
   PrizeLoad();
-  if (g_prize_pending.empty()) return;
+  const bool evo = PrizeEvoMode();
+  const bool no_gifts = evo && REXCVAR_GET(fm4_evo_no_level_gifts);
+  if (evo && REXCVAR_GET(fm4_evo_milestone_cars)) MilestonesQueue(g_prize_range_hi);
+  if (g_prize_pending.empty() && !no_gifts) return;
   if (!g_prize_queue_buf) g_prize_queue_buf = GuestAlloc(kQueueQueryBufferSize);
   if (!g_prize_queue_buf) return;
   std::string q =
       "SELECT RewardCarId, Thumbnail, DriverLevel FROM (SELECT RewardCarId, DriverLevel, SortOrder"
       " FROM Rewards_DriverLevelV3 WHERE DriverLevel>" + std::to_string(g_prize_range_lo) +
-      " AND DriverLevel<=" + std::to_string(g_prize_range_hi);
+      " AND DriverLevel<=" + std::to_string(g_prize_range_hi) + (no_gifts ? " AND 0" : "");
   size_t n = 0;
   for (const auto& [ev, seed] : g_prize_pending) {
     if (n++ == kPrizeMaxEventsPerQuery) break;
@@ -430,6 +734,10 @@ void PrizeCarQueueDone(PPCRegister& r3) {
     if (n++ >= kPrizeMaxEventsPerQuery) break;  // not part of this query
     if (!g_prize_seen.count(kPrizeLevelBase + it->first)) {
       REXLOG_INFO("Prize cars: event {} has no prize cars available, skipped", it->first);
+#if EVO_DB_API
+      EvoDbQueue(("UPDATE {P}Evolution_Prize SET AwardedAt=0 WHERE " + PrizeKey(it->first)).c_str());  // 0 = skipped
+      if (!IsMilestoneEvent(it->first)) g_prize_given_events.insert(it->first);
+#endif
       it = g_prize_pending.erase(it);
       changed = true;
     } else {
@@ -470,12 +778,91 @@ void PrizeCarPopupQuery(PPCRegister& r5) {
   g_prize_popup_pending = true;
 }
 
+// Buy Cars / used-lot list (Evolution): the stock query (string 0x82033658) is
+//   "SELECT %s *, 0 AS PartsValue, Garage.BaseCost AS CarValue, -1 AS PeakIntakePSI
+//    FROM Drivable_Data_Car AS Garage WHERE %s %s ORDER BY %s"
+// Copy it into our own buffer with the works variants (prize-only cars) filtered out. Only that query is
+// touched; any other list passing 0x8250D790 keeps r4 as it is.
+constexpr uint32_t kCarListQueryBufferSize = 8192;
+uint32_t g_carlist_buf = 0;
+
+void CarListFilterPrizeOnly(PPCRegister& r4) {
+  if (!PrizeEvoMode() || !REXCVAR_GET(fm4_evo_prize_only_filter) || !r4.u32) return;
+  const char* p = REX_KERNEL_MEMORY()->TranslateVirtual<const char*>(r4.u32);
+  const std::string q(p, strnlen(p, kCarListQueryBufferSize));
+  if (q.size() >= kCarListQueryBufferSize - 64 || q.find("FROM Drivable_Data_Car AS Garage WHERE ") == std::string::npos)
+    return;
+  const size_t order = q.rfind(" ORDER BY ");
+  if (order == std::string::npos) return;
+  if (!g_carlist_buf) g_carlist_buf = GuestAlloc(kCarListQueryBufferSize);
+  if (!g_carlist_buf) return;
+  const std::string out = q.substr(0, order) + " AND NOT (Garage.Id " + kWorksCarIds + ")" + q.substr(order);
+  GuestWriteString(g_carlist_buf, out, kCarListQueryBufferSize);
+  r4.u64 = g_carlist_buf;
+}
+
+// garage_menu.cpp: Brand Central (newest unlocked decade) / Used Car Dealership (older cars) filter for
+// the Buy Cars list. Rewrites into its own buffer and points query_ptr at it; returns false (untouched)
+// for any other query.
+bool GarageMenuCarListQuery(uint32_t& query_ptr);
+
 // 0x8250D790 (popup): r4 = the formatted car query, about to be given to the
-// popup's data source. Use the prize query instead.
+// popup's data source. Use the prize query instead. Every other car list goes
+// through the garage menu's decade filter and then CarListFilterPrizeOnly (each
+// rebuilds into its own buffer, the second reading the first's result). This is
+// the only hook at this address.
 void PrizeCarPopupSetQuery(PPCRegister& r4) {
-  if (!g_prize_popup_pending) return;
+  if (!g_prize_popup_pending) {
+    uint32_t qp = r4.u32;
+    if (GarageMenuCarListQuery(qp)) r4.u64 = qp;
+    CarListFilterPrizeOnly(r4);
+    return;
+  }
   g_prize_popup_pending = false;
   r4.u64 = g_prize_popup_buf;
+}
+
+// Prize cars are worth 0 credits when sold (Evolution). Sell value = sub_82409368(r3 = profile garage
+// table, r4 = garage Id): it runs "SELECT CarId, Flags, PartsValue FROM %s WHERE Id=%u" (0x82014AE4,
+// formatted at r1+192), then value = BaseCost(CarId) * scale + PartsValue * scale (or a fixed config
+// value when Flags & 2), and returns it with "mr r3,r31" at 0x82409554. Callers: the sale itself
+// (0x82423640) and the value shown in the garage (0x82544404, 0x82558EEC).
+namespace {
+thread_local bool t_sell_works = false;  // this call's car is a works variant (seen at 0x8240947C)
+
+uint32_t SellValueGarageId(uint32_t sp) {
+  const char* s = REX_KERNEL_MEMORY()->TranslateVirtual<const char*>(sp + 192);
+  const std::string q(s, strnlen(s, 512));
+  const size_t at = q.rfind("WHERE Id=");
+  return at == std::string::npos ? 0 : uint32_t(std::strtoul(q.c_str() + at + 9, nullptr, 10));
+}
+}  // namespace
+
+// 0x8240947C (path without Flags & 2): r3 = the car's CarId, just read.
+void SellValueSeeCarId(PPCRegister& r3) {
+  t_sell_works = r3.u32 >= kWorksCarFirst && r3.u32 <= kWorksCarLast;
+}
+
+// 0x82409554: r31 = the sell value about to be returned. Zero it for works variants and for garage Ids
+// recorded as prize cars (EVO_DB_API; without it only works variants are caught).
+void SellValueResult(PPCRegister& r1, PPCRegister& r31) {
+  const bool works = t_sell_works;
+  t_sell_works = false;
+  if (!PrizeEvoMode() || !REXCVAR_GET(fm4_evo_no_sell_prize_cars)) return;
+  bool prize = works;
+  uint32_t garage_id = 0;
+  if (!prize) {
+    garage_id = SellValueGarageId(r1.u32);
+    std::lock_guard<std::recursive_mutex> lock(g_prize_mutex);
+    PrizeLoad();
+    prize = garage_id && g_prize_garage_ids.count(garage_id);
+  }
+  if (prize && r31.u32) {
+    static int logged = 0;  // the garage screen asks for the value on every redraw
+    if (logged++ < 20)
+      REXLOG_INFO("Prize cars: sell value {} -> 0 (garage car {}{})", r31.u32, garage_id, works ? ", works variant" : "");
+    r31.u64 = 0;
+  }
 }
 
 // 0x82449454 / 0x82449470: reward title = string "IDS_GiftCarTitle_<level>"
@@ -484,6 +871,11 @@ void PrizeCarPopupSetQuery(PPCRegister& r4) {
 void PrizeCarTitleFormat(PPCRegister& r4, PPCRegister& r5) {
   g_prize_title_swap = false;
   if (!IsPrizeLevel(r5.u32)) return;
+  // Level milestone: keep the stock gift title of that driver level (IDS_GiftCarTitle_<level>).
+  if (IsMilestoneEvent(r5.u32 - kPrizeLevelBase)) {
+    r5.u64 = MilestoneLevel(r5.u32 - kPrizeLevelBase);
+    return;
+  }
   const uint32_t fmt = GuestConstString(g_prize_title_fmt, "IDS_Name_%d");
   if (!fmt || !GuestConstString(g_prize_title_table, "Events")) return;
   r4.u64 = fmt;
@@ -511,10 +903,24 @@ void PrizeCarFlushItem(PPCRegister& r31) {
   r31.u64 = g_prize_flush_prev;
   std::lock_guard<std::recursive_mutex> lock(g_prize_mutex);
   PrizeLoad();
-  if (g_prize_pending.erase(ev)) {
-    PrizeSave();
-    REXLOG_INFO("Prize cars: prize for event {} given", ev);
-  }
+  const auto found = g_prize_pending.find(ev);
+  if (found == g_prize_pending.end()) return;
+#if EVO_DB_API
+  // Record the car and its new garage row (the gift is in the garage by now; the newest garage row of
+  // that car is the gift), then remember the garage Id so the car sells for 0.
+  const std::string pick = "(SELECT Id FROM (" + PrizeIdsSelect(ev, found->second) + ") ORDER BY (Id*" +
+                           std::to_string(found->second) + ")%100003 LIMIT 1)";
+  const std::string key = PrizeKey(ev);
+  EvoDbQueue(("UPDATE {P}Evolution_Prize SET AwardedAt=CAST(strftime('%s','now') AS INTEGER), CarId=" + pick +
+              ", GarageId=(SELECT MAX(Id) FROM {P}Career_Garage WHERE CarId=" + pick + ") WHERE " + key).c_str());
+  static const char* const kGarageCol[] = {"G"};
+  EvoDbRead(("SELECT COALESCE(GarageId,0) AS G FROM {P}Evolution_Prize WHERE " + key).c_str(), kGarageCol, 1,
+            PrizeDbGarageRow);
+  if (!IsMilestoneEvent(ev)) g_prize_given_events.insert(ev);
+#endif
+  g_prize_pending.erase(found);
+  PrizeSave();
+  REXLOG_INFO("Prize cars: prize for event {} given", ev);
 }
 
 // 0x824494CC: reward card text. Levels above 50 are shown as a credits reward

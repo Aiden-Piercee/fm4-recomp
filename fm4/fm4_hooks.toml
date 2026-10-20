@@ -227,6 +227,21 @@ name = "DevKeysEventHighlighted"
 address = 0x824F4344
 registers = ["r3"]
 
+# Evolution intro popup (dev_keys.cpp). FM4_EVO_INTRO=0 or FM4_EVO=0 = off.
+# Event List screen CCareerEventSelect (vtable 0x82032564), slot 5 entry: the
+# screen is being entered; queue the once-per-profile intro check.
+[[midasm_hook]]
+name = "EvoIntroEventListEnter"
+address = 0x824EDE00
+registers = ["r3"]
+
+# Same screen, slot 9 entry = input handler: skipped while the intro is open.
+[[midasm_hook]]
+name = "EvoIntroInput"
+address = 0x824FBED8
+registers = ["r3"]
+return_on_true = true
+
 # Real AI driver pool (fm4/src/hooks.cpp, pack tools/dlc/make_ai_drivers_pack.py):
 # career grid AI query "... WHERE RegionID=%d AND Rank=%d" gets ORDER BY RANDOM(),
 # so every driver sharing a region and rank can be picked. FM4_AI_DRIVER_POOL=0 disables.
@@ -621,6 +636,29 @@ registers = ["r3"]
 return_on_true = true
 
 # ---------------------------------------------------------------------------
+# Home-screen CARS menu: BRAND CENTRAL + USED CAR DEALERSHIP (fm4/src/garage_menu.cpp).
+# Labels come through ModsMenuText. FM4_EVO=0 or FM4_GARAGE_MENU=0 = off.
+# ---------------------------------------------------------------------------
+# Builder 0x825896B8: r5 = IDS_Buy_Cars id, just loaded for item 9's label.
+[[midasm_hook]]
+name = "GarageMenuRelabel"
+address = 0x82589910
+registers = ["r5"]
+after_instruction = true
+
+# Builder 0x825896B8: BUY CARS added, TAKE PHOTO next; r30 = CARS submenu.
+[[midasm_hook]]
+name = "GarageMenuAdd"
+address = 0x82589958
+registers = ["r1", "r13", "fpscr", "r30"]
+
+# Pick handler 0x82591398, before "mr r31,r4": r4 = item id (27 -> 9).
+[[midasm_hook]]
+name = "GarageMenuSelect"
+address = 0x825913AC
+registers = ["r4"]
+
+# ---------------------------------------------------------------------------
 # Staggered wheels: separate front and rear rims (staggered_wheels.cpp,
 # claude/separate-front-rear-wheels-research-2026-10-12.md).
 # FM4_STAGGERED_WHEELS=0 disables, FM4_STAGGERED_WHEELS_PIN=0 only the picker.
@@ -806,3 +844,18 @@ name = "McarDestroyAll"
 address = 0x824DD85C
 registers = ["r31", "r1"]
 jump_address_on_true = 0x824DD860
+
+# Evolution: prize cars sell for 0 credits (hooks.cpp, fm4_evo_no_sell_prize_cars). Sell value
+# sub_82409368(r3 = garage table, r4 = garage Id) runs "SELECT CarId, Flags, PartsValue FROM %s WHERE Id=%u"
+# (formatted at r1+192) and returns "mr r3,r31" at 0x82409554.
+# 0x8240947C (no Flags & 2 path): r3 = the CarId just read (works variants 12800-12899).
+[[midasm_hook]]
+name = "SellValueSeeCarId"
+address = 0x8240947C
+registers = ["r3"]
+
+# 0x82409554: r31 = sell value about to be returned; r1+192 still holds the formatted query (garage Id).
+[[midasm_hook]]
+name = "SellValueResult"
+address = 0x82409554
+registers = ["r1", "r31"]

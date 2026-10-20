@@ -143,6 +143,13 @@ REXCVAR_DEFINE_COMMAND(fm4_buycars_classic, []() {
                        "CLASSIC Buy Cars: turn all 3D stage changes off (also remove the thumbnail pack to get "
                        "the old pictures back). Takes effect the next time the list opens");
 
+// Mods menu FEATURES tab toggle (mods_menu.cpp): the whole stage on or off in one go.
+bool BuyStageUserEnabled() { return REXCVAR_GET(fm4_buycars_stage); }
+void BuyStageSetUserEnabled(bool on) {
+  REXCVAR_SET(fm4_buycars_stage, on);
+  REXCVAR_SET(fm4_buycars_color_camera, on);
+}
+
 namespace {
 constexpr uint32_t kGarageGlobal = 0x82DC3828;
 constexpr uint32_t kFnShowStockCar = 0x824CDC18;
@@ -348,7 +355,13 @@ double CameraSignature() {
 // preset serializer sub_824BE698: +0/4/8 position, +16/20/24 facing direction, +32 fov).
 uint32_t FindPreset(Guest& g, uint32_t name_off) {
   const uint32_t table = Readable(kPresetTableSlot, 4) ? Load32(kPresetTableSlot) : 0;
-  if (!Readable(table, 4)) return 0;
+  if (!Readable(table, 12)) return 0;
+  // The lookup (sub_824D4070) walks a sorted array of 96-byte entries at [table+4] .. [table+8]. A table that is
+  // still being built made it fault on a garbage pointer (guest AV in sub_824BDF10, Alfa Romeo / F class opens).
+  // Only call it when the array looks sane; otherwise report "not found" and let the caller retry later.
+  const uint32_t arr_begin = Load32(table + 4), arr_end = Load32(table + 8);
+  if (arr_end < arr_begin || (arr_end - arr_begin) % 96 != 0 || (arr_end - arr_begin) / 96 > 4096) return 0;
+  if (arr_end != arr_begin && (!Readable(arr_begin, 96) || !Readable(arr_end - 96, 96))) return 0;
   g.Call(kFnStrCtor, g_scratch + kOffStr, g_scratch + name_off);
   const uint32_t preset = g.Call(kFnPresetLookup, table, g_scratch + kOffStr, 0xFFFFFFFFu, 0);
   g.Call(kFnStrDtor, g_scratch + kOffStr, 1, 0);

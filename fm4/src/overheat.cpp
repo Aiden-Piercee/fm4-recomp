@@ -86,6 +86,16 @@
 #include <unordered_map>
 #include <vector>
 
+using EngineReliabilityProvider = bool (*)(uint32_t car_phys, float& cooling_tier, float& wear);
+void EngineReliabilitySetEnabled(bool on);
+bool EngineReliabilityEnabled();
+void EngineReliabilitySetProvider(EngineReliabilityProvider fn);
+// part_tune.cpp (Performance Parts thread)
+void PartTuneRegister();
+float PartTuneTorqueMult(uint32_t car_phys, float rpm);
+void PartTuneSetPlayerCar(uint32_t car_phys);
+void PartTuneForgetCar(uint32_t car_phys);
+
 namespace {
 
 constexpr uint32_t kOmega = 2724, kDamage = 2732, kMult = 2736, kPower = 2800;
@@ -181,7 +191,7 @@ const char* FaultName(int f) {
 float FaultRate() {
   static const float r = [] {
     const char* v = std::getenv("FM4_FAULTS");
-    if (!v || !*v) return 0.0f;
+    if (!v || !*v) return 1.0f;  // default: realistic faults (they still need Simulation damage)
     std::string t(v);
     for (auto& ch : t) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     if (t == "1" || t == "realistic") return 1.0f;
@@ -195,7 +205,7 @@ float FaultRate() {
 int Mode() {
   static const int mode = [] {
     const char* v = std::getenv("FM4_OVERHEAT");
-    if (!v || !*v) return 1;
+    if (!v || !*v) return 2;  // default: heat model on; it only damages engines in Simulation damage mode
     return std::clamp(std::atoi(v), 0, 2);
   }();
   return mode;
@@ -268,6 +278,10 @@ struct EngineState {
   int fi = 0;  // forced induction: 0 none, 1 turbo, 2 supercharger
   float boost = 0.0f, boost_min = 0.0f, boost_max = 0.0f;
   float rpm = 0.0f, damage = 0.0f;
+  float base_mult = 0.0f, tuned_mult = 0.0f;  // power multiplier before / after the part tune (see below)
+  float cool = 0.0f;   // fitted cooling tier (0 = stock), from the provider
+  float wear = 0.0f;   // engine wear 0 fresh .. 1 worn, from the provider
+  float build = 0.0f;  // how hard the engine is built 0..1 (redline and boost)
   Clock::time_point last_seen{};
   Clock::time_point last_log{};
 };
@@ -288,6 +302,8 @@ int g_fault_next = kCoolantLeak;  // test key cycles through the faults
 int g_fault_pick = kCoolantLeak;
 std::mt19937 g_rng{std::random_device{}()};
 float Uniform() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(g_rng); }
+std::atomic<bool> g_reliability_on{true};  // Options toggle; off = temperatures only
+std::atomic<EngineReliabilityProvider> g_provider{nullptr};
 std::atomic<int> g_force_step{0};  // 0 -> 0.35, 1 -> 1.0, 2 -> 0 (repair)
 float g_force_value = 0.0f;
 
@@ -408,21 +424,24 @@ float Model(EngineState& s, float omega, float limiter, float throttle, float sp
   const float air = (0.55f + 0.45f * std::clamp(speed / 35.0f, 0.0f, 1.0f)) * (1.0f - 0.45f * s.draft);
 
   // Coolant: heat in from load and rpm; the radiator only opens above the thermostat.
-  const float heat_in = 1.6f * HeatScale() * (0.15f + 0.85f * load) * (0.3f + 0.7f * rpm_n);
+  // A hard-built engine (high redline, big boost) makes more heat.
+  const float heat_in = 1.6f * HeatScale() * (1.0f + 0.5f * s.build) * (0.15f + 0.85f * load) * (0.3f + 0.7f * rpm_n);
   const float open = std::clamp((s.tw - (kThermostat - 2.0f)) / 4.0f, 0.0f, 1.0f);
   // Coolant leak: the radiator loses efficiency over about 4 minutes (down to 25%).
   const float rad = s.fault == kCoolantLeak ? std::max(0.25f, 1.0f - s.fault_t / 240.0f) : 1.0f;
-  const float heat_out = 0.0213f * air * rad * s.rad_health * open * std::max(s.tw - kAmbient, 0.0f);
+  // Cooling part: +12% heat rejection per tier; a worn engine (fouled radiator) loses up to 25%.
+  const float cooling = (1.0f + 0.12f * s.cool) * (1.0f - 0.25f * s.wear);
+  const float heat_out = 0.0213f * air * rad * s.rad_health * cooling * open * std::max(s.tw - kAmbient, 0.0f);
   s.tw += (heat_in - heat_out) * dt;
   s.tw = std::clamp(s.tw, std::min(kAmbient, 85.0f), 160.0f);
 
   // Oil runs hotter than the coolant: about 10 C at idle, plus friction heat
   // that grows with rpm and load (race pace about 110-120 C, flat out 125-130).
-  const float to_target = s.tw + 10.0f + 25.0f * rpm_n * rpm_n * (0.5f + 0.5f * load);
+  const float to_target = s.tw + 10.0f - 3.0f * s.cool + 25.0f * (1.0f + 0.3f * s.build) * rpm_n * rpm_n * (0.5f + 0.5f * load);
   s.to += (to_target - s.to) / 30.0f * dt;
 
   // Pressure: about 1.2 bar at idle, up to a 5 bar relief valve, thinner when hot.
-  const float thin = std::clamp(1.0f - 0.01f * std::max(s.to - 110.0f, 0.0f), 0.3f, 1.0f);
+  const float thin = std::clamp(1.0f - 0.01f * std::max(s.to - 110.0f, 0.0f) - 0.15f * s.wear, 0.3f, 1.0f);
   s.p = omega < 10.0f ? 0.0f : std::min(5.0f, 1.2f + 4.5f * rpm_n) * thin;
 
   // Oil leak: the level, and with it the pressure, falls over about 5 minutes.
@@ -436,7 +455,7 @@ float Model(EngineState& s, float omega, float limiter, float throttle, float sp
   float dd = 0.0f;
   if (s.tw > 115.0f) dd += 0.002f * (s.tw - 115.0f) * dt;  // head gasket
   if (s.to > 140.0f) dd += 0.002f * (s.to - 140.0f) * dt;  // oil breakdown
-  if (s.p < 0.7f && rpm_n > 0.5f) dd += 0.25f * dt;         // bearings
+  if (s.p < 0.7f + 0.15f * s.wear && rpm_n > 0.5f) dd += 0.25f * dt;  // bearings (worn ones sooner)
   return dd;
 }
 
@@ -457,7 +476,11 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
   auto [it, fresh] = g_cars.try_emplace(e);
   EngineState& s = it->second;
   // New car object, or not stepped for 2 s (between races): start warm and clean.
-  if (fresh || now - s.last_seen > std::chrono::seconds(2)) {
+  const bool fresh_car = fresh || now - s.last_seen > std::chrono::seconds(2);
+  static const bool tune_registered = (PartTuneRegister(), true);
+  (void)tune_registered;
+  if (fresh_car) {
+    if (Ld8(e + kFlagB) == 0) PartTuneSetPlayerCar(e);  // same player guess as the HUD
     s = EngineState{};
     s.force_gen = g_force_gen.load();
     s.fault_gen = g_fault_gen.load();
@@ -571,7 +594,7 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
     }
     s.vlong = vl; s.have_long = true;
   }
-  s.damaging = mode == 2 && (dmg_mode == 2 || AnyMode());
+  s.damaging = mode == 2 && g_reliability_on.load() && (dmg_mode == 2 || AnyMode());
 
   // ---- Boost (turbo / supercharger) ----
   uint32_t boost_addr = 0;
@@ -585,6 +608,24 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
     s.fi = 0;
   }
   if (boost_addr) s.boost = LdF(boost_addr);
+
+  // ---- Car stats: build strength from the physics object, cooling tier and wear from the provider ----
+  {
+    const float redline = std::clamp((limiter * 9.5493f - 6500.0f) / 4000.0f, 0.0f, 1.0f);
+    const float boost_bar = s.fi ? std::clamp((s.boost_max - kAtmPsi) / kPsiPerBar / 1.5f, 0.0f, 1.0f) : 0.0f;
+    s.build = 0.5f * redline + 0.5f * boost_bar;
+    if (fresh_car) {
+      bool have = false;
+      if (auto prov = g_provider.load()) { float c = 0.0f, w = 0.0f; if (prov(e, c, w)) { s.cool = std::clamp(c, 0.0f, 10.0f); s.wear = std::clamp(w, 0.0f, 1.0f); have = true; } }
+      // AI opponents have no garage row: give them stand-in stats so they face the same causes as the player.
+      // Wear is random up to 50%; cooling roughly follows how hard the engine is built, but may fall short.
+      // Cars with E+5403 == 0 are treated as the player (see HudCarLocked) and left alone.
+      if (!have && Ld8(e + kFlagB) != 0) {
+        s.wear = 0.5f * Uniform();
+        s.cool = std::clamp(std::round(3.0f * s.build + (Uniform() - 0.6f) * 2.0f), 0.0f, 3.0f);
+      }
+    }
+  }
 
   // ---- Random faults ----
   auto start_fault = [&](int f, bool forced) {
@@ -610,7 +651,7 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
     // About 1% per race hour at "realistic", times stress.
     const float stress = 1.0f + (s.tw > 105.0f ? 2.0f : 0.0f) + (s.to > 125.0f ? 2.0f : 0.0f) +
                          (s.starve > 3.0f ? 3.0f : 0.0f) + (s.overrev_t > 0.0f ? 5.0f : 0.0f) +
-                         3.0f * LdF(e + kDamage);
+                         3.0f * LdF(e + kDamage) + 3.0f * s.wear + 1.5f * s.build;
     const float hazard = (0.01f / 3600.0f) * FaultRate() * stress;
     if (Uniform() < hazard * dt) {
       const float r = Uniform();
@@ -657,6 +698,15 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
     }
   }
 
+  // Part tune (part_tune.cpp): rpm-dependent multiplier on the engine power multiplier. If the game did
+  // not recompute E+2736 since our last write (value unchanged) start from the stored base, so it never compounds.
+  if (running) {
+    const float cur = LdF(e + kMult);
+    const float base = (s.tuned_mult > 0.0f && cur == s.tuned_mult) ? s.base_mult : cur;
+    const float tuned = base * PartTuneTorqueMult(e, omega * 9.5493f);
+    if (tuned > 0.0f && tuned == tuned) { StF(e + kMult, tuned); s.base_mult = base; s.tuned_mult = LdF(e + kMult); }
+  }
+
   const float dd = Model(s, omega, limiter, throttle, s.speed, dt);
   if (s.damaging && dd > 0.0f) WriteDamage(e, s, LdF(e + kDamage) + dd);
 
@@ -668,7 +718,7 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
     s.last_log = now;
     // Forget cars from earlier races so "cars=" is the current grid.
     for (auto i = g_cars.begin(); i != g_cars.end();) {
-      if (i->first != e && now - i->second.last_seen > std::chrono::seconds(5)) i = g_cars.erase(i);
+      if (i->first != e && now - i->second.last_seen > std::chrono::seconds(5)) { PartTuneForgetCar(i->first); i = g_cars.erase(i); }
       else ++i;
     }
     REXLOG_WARN(
@@ -764,6 +814,8 @@ class OverheatHud : public rex::ui::ImGuiDialog {
         ImGui::TextColored(Grade(1.0f - c.rad_health, 0.01f, 0.5f), "RADIATOR %3.0f%%", c.rad_health * 100.0f);
       if (c.draft > 0.2f) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.20f, 1.0f), "DRAFT  %.0f m", c.ahead);
       ImGui::PopFont();
+      if (c.cool > 0.0f || c.wear > 0.0f)
+        ImGui::TextDisabled("cooling tier %.0f  wear %.0f%%  build %.0f%%", c.cool, c.wear * 100.0f, c.build * 100.0f);
       ImGui::TextDisabled("%s  %.0f km/h  %.1f g  AIR %.0f C", c.damaging ? "heat damage ON" : "temps only",
                           c.speed * 3.6f, c.g, air);
       ImGui::TextDisabled("car %08X  (%zu on track)", car, count);
@@ -779,3 +831,10 @@ std::unique_ptr<rex::ui::ImGuiDialog> CreateOverheatHud(rex::ui::ImGuiDrawer* dr
   if (!drawer || Mode() == 0 || !HudEnabled()) return nullptr;
   return std::make_unique<OverheatHud>(drawer);
 }
+
+// Options toggle (mods_menu.cpp): on by default; off = temperatures and HUD only, no damage or faults.
+void EngineReliabilitySetEnabled(bool on) { g_reliability_on.store(on); }
+bool EngineReliabilityEnabled() { return g_reliability_on.load(); }
+// The garage / part-tune code supplies per-car data once when a car is first seen in a race:
+// provider(car_physics_addr, cooling_tier, wear 0..1) returns true if it filled both. Not called per substep.
+void EngineReliabilitySetProvider(EngineReliabilityProvider fn) { g_provider.store(fn); }

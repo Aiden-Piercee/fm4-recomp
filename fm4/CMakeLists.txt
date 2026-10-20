@@ -19,6 +19,8 @@ set(FM4_SOURCES
     src/buy_stage.cpp
     src/overheat.cpp
     src/mods_menu.cpp
+    src/garage_menu.cpp
+    src/part_tune.cpp
     src/staggered_wheels.cpp
     src/rim_picker.cpp
     src/d3d_probe.cpp

@@ -37,6 +37,8 @@ fm4/src/brake_preview.cpp
 fm4/src/buy_stage.cpp
 fm4/src/overheat.cpp
 fm4/src/mods_menu.cpp
+fm4/src/garage_menu.cpp
+fm4/src/part_tune.cpp
 fm4/src/staggered_wheels.cpp
 fm4/src/rim_picker.cpp
 fm4/src/multicar_trace.cpp
