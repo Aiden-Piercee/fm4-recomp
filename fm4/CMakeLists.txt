@@ -21,6 +21,7 @@ set(FM4_SOURCES
     src/mods_menu.cpp
     src/garage_menu.cpp
     src/part_tune.cpp
+    src/used_lot.cpp
     src/staggered_wheels.cpp
     src/rim_picker.cpp
     src/d3d_probe.cpp

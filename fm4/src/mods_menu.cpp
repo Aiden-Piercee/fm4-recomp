@@ -309,6 +309,10 @@ bool EvoUnlockEnabled();               // dev_keys.cpp: Evolution decade unlock 
 void EvoUnlockSetEnabled(bool on);
 bool EvoHudVisible();
 void EvoHudSetVisible(bool on);
+bool EvoIntroUserEnabled();            // dev_keys.cpp: Evolution intro popup
+void EvoIntroSetUserEnabled(bool on);
+void EvoIntroShowAgain();
+bool EvoIntroShowAgainPending();
 bool PrizeNoLevelGiftsEnabled();       // hooks.cpp: Game Levelling switches
 void PrizeNoLevelGiftsSetEnabled(bool on);
 bool PrizeEventCarsEnabled();
@@ -323,6 +327,8 @@ bool PartTuneEnabled();                // part_tune.cpp: Performance Parts switc
 void PartTuneSetEnabled(bool on);
 bool PartWearEnabled();
 void PartWearSetEnabled(bool on);
+bool UsedLotRotationUserEnabled();
+void UsedLotSetRotationUserEnabled(bool on);
 bool ModsMenuText(PPCRegister& r3) {
   if (GarageMenuText(r3)) return true;
   if (!g_scratch) return false;
@@ -595,6 +601,12 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
     if (ImGui::Checkbox("Evolution: prize car for completing an event (live)", &evcars)) PrizeEventCarsSetEnabled(evcars);
     bool miles = PrizeMilestonesEnabled();
     if (ImGui::Checkbox("Evolution: car at driver level 10/20/30/40/50 (live)", &miles)) PrizeMilestonesSetEnabled(miles);
+    bool intro = EvoIntroUserEnabled();
+    if (ImGui::Checkbox("Evolution: intro popup the first time the Event List opens (live)", &intro))
+      EvoIntroSetUserEnabled(intro);
+    ImGui::SameLine();
+    if (EvoIntroShowAgainPending()) ImGui::TextDisabled("[ shows on the next Event List open ]");
+    else if (ImGui::SmallButton("Show intro again")) EvoIntroShowAgain();
     bool pfilt = PrizeOnlyFilterEnabled();
     if (ImGui::Checkbox("Evolution: hide prize-only works cars from Buy Cars / used lot (next list open)", &pfilt))
       PrizeOnlyFilterSetEnabled(pfilt);
@@ -604,6 +616,8 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
     if (ImGui::Checkbox("Part tuning character (brand/size power-curve shape)", &ptune)) PartTuneSetEnabled(ptune);
     bool pwear = PartWearEnabled();
     if (ImGui::Checkbox("Engine wear (age/mileage power loss)", &pwear)) PartWearSetEnabled(pwear);
+    bool ulot = UsedLotRotationUserEnabled();
+    if (ImGui::Checkbox("Rotating used lot (new stock after each finished event; applies at the next roll)", &ulot)) UsedLotSetRotationUserEnabled(ulot);
     bool evo_unlock = EvoUnlockEnabled();
     if (ImGui::Checkbox("Evolution decade unlock (next decade opens after a championship + 4 events; off = columns stay as they are)", &evo_unlock))
       EvoUnlockSetEnabled(evo_unlock);

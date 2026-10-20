@@ -658,6 +658,18 @@ name = "GarageMenuSelect"
 address = 0x825913AC
 registers = ["r4"]
 
+# Used dealership price: list row builder, right after bl 0x823F2BA0 (r3 = price, r29 = car id).
+[[midasm_hook]]
+name = "GarageMenuListPrice"
+address = 0x8250BF0C
+registers = ["r3", "r29"]
+
+# Used dealership price: purchase function, right after bl 0x823F2BA0 (r3 = price, r31 = car id).
+[[midasm_hook]]
+name = "GarageMenuBuyPrice"
+address = 0x82433278
+registers = ["r3", "r31"]
+
 # ---------------------------------------------------------------------------
 # Staggered wheels: separate front and rear rims (staggered_wheels.cpp,
 # claude/separate-front-rear-wheels-research-2026-10-12.md).

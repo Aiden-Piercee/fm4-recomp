@@ -39,6 +39,7 @@ fm4/src/overheat.cpp
 fm4/src/mods_menu.cpp
 fm4/src/garage_menu.cpp
 fm4/src/part_tune.cpp
+fm4/src/used_lot.cpp
 fm4/src/staggered_wheels.cpp
 fm4/src/rim_picker.cpp
 fm4/src/multicar_trace.cpp
@@ -86,6 +87,7 @@ Launch FM4 (File Trace).bat
 Launch FM4 (Model Trace).bat
 Launch FM4 (Multi-car Trace).bat
 Launch FM4 (Overheat test).bat
+Launch FM4 (Evolution).bat
 Launch FM4 (pick car count).bat
 Launch FM4 (test T1).bat
 Launch FM4 (test T2).bat

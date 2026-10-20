@@ -236,13 +236,14 @@ REXCVAR_DEFINE_BOOL(fm4_evo_prize_only_filter, true, "Forza Motorsport 4/Evoluti
 REXCVAR_DEFINE_BOOL(fm4_evo_no_sell_prize_cars, true, "Forza Motorsport 4/Evolution prizes",
                     "Evolution: prize cars and works variants are worth 0 credits when sold (no money farming)");
 
-// Prize state store. EVO_DB_API 0 (default): pending prizes and milestone levels live in
-// fm4_prize_cars_pending.txt / fm4_prize_milestones.txt next to the exe, as before. EVO_DB_API 1: they
+// Prize state store. EVO_DB_API 1 (default): pending prizes, milestone levels and prize cars' garage Ids
 // live in the profile's own table {P}Evolution_Prize through the Evolution DB helper (dev_keys.cpp;
-// {P} = the profile table prefix), the txt files are imported once and renamed to .imported, and
-// prize cars are remembered by garage Id so they can't be sold for money.
+// {P} = the profile table prefix). Any fm4_prize_cars_pending.txt / fm4_prize_milestones.txt next to the
+// exe is imported once (INSERT OR IGNORE, so rows already in the table win) and kept as *.imported.
+// Prize cars are remembered by garage Id so they can't be sold for money.
+// EVO_DB_API 0: the old txt files only (no DB helper needed).
 #ifndef EVO_DB_API
-#define EVO_DB_API 0
+#define EVO_DB_API 1
 #endif
 #if EVO_DB_API
 void EvoDbQueue(const char* sql);

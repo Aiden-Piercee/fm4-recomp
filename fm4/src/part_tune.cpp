@@ -51,6 +51,8 @@ struct CarTune {
 };
 std::unordered_map<uint32_t, CarTune> g_cars;
 uint32_t g_player_car = 0;
+int g_garage_id = 0;                  // Career_Garage.Id of the player's car (0 = unknown -> neutral)
+char g_profile_prefix[32] = "";      // profile table prefix as the caller's Db class uses it (e.g. "" or "NewProfile_")
 
 float Clamp(float v, float lo, float hi) { return std::min(hi, std::max(lo, v)); }
 float Smooth(float t) { t = Clamp(t, 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
@@ -80,10 +82,25 @@ bool Provider(uint32_t car_phys, float& cooling_tier, float& wear) {
   PartTuneQueryFn q = g_query.load();
   if (!q || g_player_car != car_phys) return false;
   double row[16] = {};
-  // cooling tier and wear inputs for the player's current career car (garage id from Main/CareerCar,
-  // mapping still unverified: the caller passes the garage id through PartTuneSetPlayerCar)
-  // The SQL text is built by the caller side once the mapping is known; kept as a template here.
-  if (q("PARTTUNE_PLAYER_ROW", row, 1, 16) < 1) return false;
+  // One row for the player's garage car: cooling tier, wear inputs, then the part shape columns.
+  // Column order (index): 0 cooling Level, 1 DistanceDriven (km assumed), 2 CurOwnerNumRaces, 3 NumOwners,
+  // 4 TotalRepairs, 5 size ratio, 6..8 low/mid/high bias, 9 redline rpm. g_garage_id is the Career_Garage.Id;
+  // whether Main/CareerCar is a garage Id or a car Id is unverified, see PartTuneSetPlayerGarage.
+  // Size ratio and biases come from Evolution_PartTune joined on the fitted camshaft and fuel system rows;
+  // a missing table or row gives NULL -> 0 -> neutral (the code above treats 0 as 1.0).
+  char sql[1024];
+  std::snprintf(sql, sizeof sql,
+      "SELECT COALESCE(o.Level,0), g.DistanceDriven, g.CurOwnerNumRaces, g.NumOwners, g.TotalRepairs, "
+      "COALESCE(f.Size,0) / MAX(COALESCE(ca.Size,0),0.0001), "
+      "COALESCE(f.LowBias,0), COALESCE(f.MidBias,0), COALESCE(f.HighBias,0), cam.RedlineRPM "
+      "FROM %sCareer_Garage g "
+      "LEFT JOIN List_UpgradeEngineOilCooling o ON o.Id = g.OilCooling "
+      "LEFT JOIN List_UpgradeEngineCamshaft cam ON cam.Id = g.Camshaft "
+      "LEFT JOIN Evolution_PartTune f ON f.PartEnum = 16 AND f.PartId = g.FuelSystem "
+      "LEFT JOIN Evolution_PartTune ca ON ca.PartEnum = 12 AND ca.PartId = g.Camshaft "
+      "WHERE g.Id = %d",
+      g_profile_prefix, g_garage_id);
+  if (g_garage_id <= 0 || q(sql, row, 1, 16) < 1) return false;
   CarTune t;
   t.cooling = static_cast<float>(row[0]);
   t.wear = WearFrom(row[1], row[2], row[3], row[4]);
@@ -105,6 +122,11 @@ bool Provider(uint32_t car_phys, float& cooling_tier, float& wear) {
 
 void PartTuneSetQuery(PartTuneQueryFn fn) { g_query.store(fn); }
 void PartTuneSetPlayerCar(uint32_t car_phys) { g_player_car = car_phys; }
+// The caller (the code that knows Main/CareerCar) supplies the garage id and the profile table prefix.
+void PartTuneSetPlayerGarage(int garage_id, const char* profile_prefix) {
+  g_garage_id = garage_id;
+  std::snprintf(g_profile_prefix, sizeof g_profile_prefix, "%s", profile_prefix ? profile_prefix : "");
+}
 void PartTuneRegister() { EngineReliabilitySetProvider(&Provider); }
 
 // Multiplier for the engine power at this rpm. 1.0 when the feature is off or the car has no cached tune.

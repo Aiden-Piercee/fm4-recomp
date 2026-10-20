@@ -214,6 +214,10 @@ void GarageMenuSetUserEnabled(bool on) { REXCVAR_SET(fm4_garage_menu, on); }
 // The rewritten query goes in our own guest buffer and query_ptr is pointed at it.
 // ---------------------------------------------------------------------------
 int EvoNewestUnlockedDecadeYear();  // dev_keys.cpp
+// used_lot.cpp (the listings).
+int UsedLotCount();
+bool UsedLotGet(int index, uint32_t* car_id, uint32_t* price, uint32_t* mileage_km, bool* condition_unknown,
+                uint32_t* thumb_car_id);
 
 namespace {
 constexpr uint32_t kGarageGlobal = 0x82DC3828;  // G; G+16 = car-list flow (11 = buy new)
@@ -233,8 +237,16 @@ bool GarageMenuCarListQuery(uint32_t& query_ptr) {
   const size_t order = q.rfind(" ORDER BY ");
   if (order == std::string::npos) return false;
   const int decade = EvoNewestUnlockedDecadeYear();
+  std::string lot_ids;
+  if (g_used_lot.load()) {
+    for (int i = 0, n = UsedLotCount(); i < n; ++i) {
+      uint32_t id = 0;
+      if (UsedLotGet(i, &id, nullptr, nullptr, nullptr, nullptr)) lot_ids += (lot_ids.empty() ? "" : ",") + std::to_string(id);
+    }
+  }
+  // Used lot with listings = only today's cars; empty or off = every older car.
   const std::string clause = g_used_lot.load()
-      ? " AND Garage.Year < " + std::to_string(decade)
+      ? (lot_ids.empty() ? " AND Garage.Year < " + std::to_string(decade) : " AND Garage.Id IN (" + lot_ids + ")")
       : " AND Garage.Year BETWEEN " + std::to_string(decade) + " AND " + std::to_string(decade + 9);
   if (!g_query_buf) g_query_buf = REX_KERNEL_MEMORY()->SystemHeapAlloc(kQueryBufSize);
   if (!g_query_buf) return false;
@@ -244,6 +256,28 @@ bool GarageMenuCarListQuery(uint32_t& query_ptr) {
   query_ptr = g_query_buf;
   REXLOG_INFO("Garage menu: {} list{}", g_used_lot.load() ? "used" : "Brand Central", clause);
   return true;
+}
+
+// Advertised price of today's listing for car_id, 0 when none. Only while the dealership is open.
+static uint32_t LotPrice(uint32_t car_id) {
+  if (!Enabled() || g_faulted || !g_used_lot.load()) return 0;
+  const uint32_t g = Load32(kGarageGlobal);
+  if (g < 0x10000 || Load32(g + 16) != kFlowBuyNew) return 0;
+  for (int i = 0, n = UsedLotCount(); i < n; ++i) {
+    uint32_t id = 0, price = 0;
+    if (UsedLotGet(i, &id, &price, nullptr, nullptr, nullptr) && id == car_id) return price;
+  }
+  return 0;
+}
+
+// After the price lookup 0x823F2BA0 returned in the list row builder (r3 = price, r29 = car id).
+void GarageMenuListPrice(PPCRegister& r3, PPCRegister& r29) {
+  if (const uint32_t p = LotPrice(r29.u32)) r3.u64 = p;
+}
+
+// After the price lookup in the purchase function (r3 = price, r31 = car id), before the credits check.
+void GarageMenuBuyPrice(PPCRegister& r3, PPCRegister& r31) {
+  if (const uint32_t p = LotPrice(r31.u32)) r3.u64 = p;
 }
 
 // For the dealer year filter (H5): true while the buy screens were opened from
