@@ -349,18 +349,18 @@ bool PrizeHasPending() {
 }
 }  // namespace
 
-void EvoNoteRaceResult();  // dev_keys.cpp: Evolution T3 XP log
+void EvoNoteRaceResult(uint32_t event_id, int place);  // dev_keys.cpp: Evolution tracking
 
 // 0x8248CA30 (cmpw cr6,r25,r3): existing event row. r3 = stored place,
 // r25 = new place (17 = not every race has a result), [r30+8] = EventId.
 void PrizeCarEventPlaceUpdate(PPCRegister& r3, PPCRegister& r25, PPCRegister& r30) {
-  EvoNoteRaceResult();
+  EvoNoteRaceResult(LoadBE32(r30.u32 + 8), r25.s32);
   if (r3.s32 > 16 && r25.s32 >= 1 && r25.s32 <= 16) PrizeEventCompleted(LoadBE32(r30.u32 + 8));
 }
 
 // 0x8248CAB0: first result row for the event (single-race events finish here).
 void PrizeCarEventPlaceInsert(PPCRegister& r25, PPCRegister& r30) {
-  EvoNoteRaceResult();
+  EvoNoteRaceResult(LoadBE32(r30.u32 + 8), r25.s32);
   if (r25.s32 >= 1 && r25.s32 <= 16) PrizeEventCompleted(LoadBE32(r30.u32 + 8));
 }
 

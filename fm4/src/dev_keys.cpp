@@ -57,6 +57,8 @@ constexpr int VK_SHIFT = 0x10, VK_F6 = 0x75, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 
 #endif
 
 #include <rex/ppc.h>
+#include <imgui.h>
+#include <rex/ui/imgui_dialog.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
@@ -68,6 +70,7 @@ constexpr int VK_SHIFT = 0x10, VK_F6 = 0x75, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 namespace {
@@ -514,32 +517,157 @@ bool EnsureScratch() {
   return true;
 }
 
-// Evolution T3 poll state (see EvoNoteRaceResult).
+// ---- Evolution mode: progress tracking, decade unlock, T3 XP log, HUD state -------------------------------------
+// The 1970s column (Events 2200-2209) ships locked (Level 99). When the 1960s championship (2009) and at least four
+// other 1960s events (2000-2008) are completed in the active profile, EvoTick sets their Level to 0 through the
+// game's database layer; it sets them back to 99 when the profile no longer qualifies. Events.Level is read by the
+// Event List every time it is built, so the change shows the next time the list opens.
+constexpr int kEvoFirst60 = 2000, kEvoLast60 = 2008, kEvoChamp60 = 2009, kEvoFirst70 = 2200, kEvoLast70 = 2209;
+constexpr int kEvoNeedOthers = 4, kEvoLockLevel = 99;
+
+struct EvoHudState {
+  bool have = false;           // at least one successful tick
+  uint32_t xp = 0, level = 0;  // Main/XP, Main/Level
+  int others = 0;              // completed events among 2000-2008
+  bool champ = false;          // 2009 completed
+  int lock_level = -1;         // current Events.Level of the 1970s column (-1 unknown)
+  int write = 0;               // 0 none, 1 unlock/relock written, 2 write FAILED
+  uint32_t last_event = 0;     // last recorded race result
+  int last_place = 0;
+  long long last_tick_ms = 0;
+  std::string last_why;
+};
+std::mutex g_evo_mu;
+EvoHudState g_evo;
+
 std::atomic<long long> g_evo_xp_note_ms{0};
 std::atomic<int> g_evo_xp_polls_done{3};
+long long g_evo_boot_next_ms = 0;
+int g_evo_boot_tries = 0;
+bool g_evo_boot_done = false;
 long long EvoNowMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-void EvoXpPoll(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+bool EvoEnabled() {
   static const bool enabled = [] {
-    const char* v = std::getenv("FM4_EVO_XP_LOG");
+    const char* v = std::getenv("FM4_EVO");
     return !(v && v[0] == '0');
   }();
-  const int done = g_evo_xp_polls_done.load();
-  if (!enabled || done >= 3 || g_faulted) return;
+  return enabled;
+}
+
+// One progress check + XP log + lock/unlock of the 1970s column. Runs on the game thread inside DevKeysFrame.
+bool EvoTick(Guest& g, const char* why) {
+  const uint32_t data = ProfileData(g);
+  if (!data) return false;
+  const uint32_t profile = g.Call(kFnGetProfile, Load32(kProfileMgrGlobal));
+  if (!g.ok() || !profile) return false;
+  const std::string prefix = ProfilePrefix(profile);
+  if (prefix.empty()) return false;
+  EvoHudState st;
+  st.xp = GetSetting(g, data, "Main/XP");
+  st.level = GetSetting(g, data, "Main/Level");
+  if (!g.ok()) return false;
+  Db db(g);
+  const std::string tbl = prefix + "Career_EventResults";
+  const std::string done = " AND Place BETWEEN 1 AND 16";  // 17 = not every race of the event has a result
+  st.others = std::max(0, db.QueryInt("SELECT COUNT(*) AS V FROM " + tbl + " WHERE EventId BETWEEN " +
+                                      std::to_string(kEvoFirst60) + " AND " + std::to_string(kEvoLast60) + done, "V"));
+  st.champ = db.QueryInt("SELECT COUNT(*) AS V FROM " + tbl + " WHERE EventId=" + std::to_string(kEvoChamp60) + done, "V") > 0;
+  const std::string range = " Id BETWEEN " + std::to_string(kEvoFirst70) + " AND " + std::to_string(kEvoLast70);
+  const bool want_open = st.champ && st.others >= kEvoNeedOthers;
+  int cur = db.QueryInt("SELECT MIN(Level) AS V FROM Events WHERE" + range, "V");
+  if (!g.ok()) return false;
+  if (cur >= 0 && (want_open ? cur != 0 : cur != kEvoLockLevel)) {
+    db.Exec("UPDATE Events SET Level=" + std::to_string(want_open ? 0 : kEvoLockLevel) + " WHERE" + range);
+    const int after = db.QueryInt("SELECT MIN(Level) AS V FROM Events WHERE" + range, "V");
+    st.write = (after == (want_open ? 0 : kEvoLockLevel)) ? 1 : 2;
+    cur = after;
+    REXLOG_INFO("Evolution: 1970s column {} (others {}/{} + championship {}), write {}", want_open ? "UNLOCKED" : "re-locked",
+                st.others, kEvoNeedOthers, st.champ ? "done" : "not done", st.write == 1 ? "ok" : "FAILED");
+  }
+  st.lock_level = cur;
+  st.have = true;
+  st.last_tick_ms = EvoNowMs();
+  st.last_why = why;
+  {
+    std::lock_guard<std::mutex> lock(g_evo_mu);
+    st.last_event = g_evo.last_event;
+    st.last_place = g_evo.last_place;
+    if (st.write == 0) st.write = g_evo.write;
+    g_evo = st;
+  }
+  REXLOG_INFO("Evolution T3: {}, Main/XP={} Main/Level={}; 1960s others {}/{}, championship {}, 1970s Level {}", why, st.xp,
+              st.level, st.others, kEvoNeedOthers, st.champ ? "done" : "no", cur);
+  return true;
+}
+
+void EvoPoll(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  if (!EvoEnabled() || g_faulted) return;
+  const long long now = EvoNowMs();
+  const char* why = nullptr;
+  bool startup = false;
+  if (!g_evo_boot_done && g_evo_boot_tries < 90 && now >= g_evo_boot_next_ms) {
+    g_evo_boot_next_ms = now + 10000;
+    ++g_evo_boot_tries;
+    why = "startup check";
+    startup = true;
+  }
   static const long long kDelayMs[3] = {2000, 6000, 15000};
+  const int polls = g_evo_xp_polls_done.load();
   const long long note = g_evo_xp_note_ms.load();
-  if (!note || EvoNowMs() - note < kDelayMs[done]) return;
-  g_evo_xp_polls_done = done + 1;
+  if (polls < 3 && note && now - note >= kDelayMs[polls]) {
+    g_evo_xp_polls_done = polls + 1;
+    why = "after the race result";
+    startup = false;
+  }
+  if (!why) return;
   if (!EnsureScratch()) return;
   Guest g(r1, r13, fpscr);
-  const uint32_t data = ProfileData(g);
-  if (!data) return;
-  const uint32_t xp = GetSetting(g, data, "Main/XP");
-  const uint32_t level = GetSetting(g, data, "Main/Level");
+  const bool ok = EvoTick(g, why);
   if (!g.ok()) { g_faulted = true; return; }
-  REXLOG_INFO("Evolution T3: {} s after the race result, Main/XP={} Main/Level={}", kDelayMs[done] / 1000, xp, level);
+  if (ok && startup) g_evo_boot_done = true;
 }
+
+// Small always-on readout, top left, for tracking Evolution state while testing. FM4_EVO_HUD=0 hides it.
+class EvolutionHud : public rex::ui::ImGuiDialog {
+ public:
+  explicit EvolutionHud(rex::ui::ImGuiDrawer* drawer) : rex::ui::ImGuiDialog(drawer) {}
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    EvoHudState s;
+    {
+      std::lock_guard<std::mutex> lock(g_evo_mu);
+      s = g_evo;
+    }
+    const float scale = std::max(0.6f, io.DisplaySize.y / 1080.0f);
+    ImGui::SetNextWindowPos(ImVec2(8.0f * scale, 8.0f * scale), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize;
+    if (!ImGui::Begin("##fm4_evo_hud", nullptr, flags)) { ImGui::End(); return; }
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.1f * scale);
+    ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.0f, 1.0f), "EVOLUTION  build: AI 15, 1960s slice");
+    if (!s.have) {
+      ImGui::TextDisabled("waiting for a profile ...");
+    } else {
+      ImGui::Text("XP %u   Level %u", s.xp, s.level);
+      const bool ready = s.champ && s.others >= kEvoNeedOthers;
+      ImGui::TextColored(ready ? ImVec4(0.55f, 0.95f, 0.55f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                         "1960s: %d/%d other events   championship %s", s.others, kEvoNeedOthers, s.champ ? "DONE" : "to do");
+      const bool open = s.lock_level == 0;
+      ImGui::TextColored(open ? ImVec4(0.55f, 0.95f, 0.55f, 1.0f) : ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "1970s column: %s (Level %d)",
+                         open ? "OPEN" : "LOCKED", s.lock_level);
+      if (s.write == 2) ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.25f, 1.0f), "lock write FAILED (Events not writable?)");
+      else if (s.write == 1) ImGui::TextDisabled("lock written this session");
+    }
+    if (s.last_event) ImGui::Text("last result: event %u, place %d", s.last_event, s.last_place);
+    ImGui::PopFont();
+    ImGui::End();
+  }
+};
 
 }  // namespace
 
@@ -564,7 +692,7 @@ void DevKeysEventHighlighted(PPCRegister& r3) {
 
 // 0x822F787C, main game loop, once per frame.
 void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
-  EvoXpPoll(r1, r13, fpscr);
+  EvoPoll(r1, r13, fpscr);
   if (!DevKeysEnabled()) return;
   static bool announced = false;
   if (!announced) {
@@ -633,11 +761,22 @@ void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
   }
 }
 
-// Evolution fork, test T3 (XP per race). A race result was just recorded (called from the existing prize-car
-// hooks 0x8248CA30 / 0x8248CAB0, so no new hook entry). The post-race XP write happens a little later, so
-// DevKeysFrame logs Main/XP + Main/Level 2, 6 and 15 s after the last result; the XP of a race is the
-// difference between the settled values of consecutive races. FM4_EVO_XP_LOG=0 disables.
-void EvoNoteRaceResult() {
+// Evolution fork: a race result was just recorded (called from the existing prize-car hooks 0x8248CA30 / 0x8248CAB0, so
+// no new hook entry). The post-race XP and result rows settle a little later, so DevKeysFrame runs EvoTick 2, 6 and 15 s
+// after the last result (T3: the XP of a race is the difference between the settled values of consecutive races, in the
+// "Evolution T3" lines of fm4.log). FM4_EVO=0 switches all Evolution tracking off.
+void EvoNoteRaceResult(uint32_t event_id, int place) {
+  {
+    std::lock_guard<std::mutex> lock(g_evo_mu);
+    g_evo.last_event = event_id;
+    g_evo.last_place = place;
+  }
   g_evo_xp_note_ms = EvoNowMs();
   g_evo_xp_polls_done = 0;
+}
+
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEvolutionHud(rex::ui::ImGuiDrawer* drawer) {
+  const char* v = std::getenv("FM4_EVO_HUD");
+  if (!drawer || !EvoEnabled() || (v && v[0] == '0')) return nullptr;
+  return std::make_unique<EvolutionHud>(drawer);
 }

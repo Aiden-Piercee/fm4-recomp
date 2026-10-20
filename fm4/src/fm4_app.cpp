@@ -286,6 +286,9 @@ std::unique_ptr<rex::ui::ImGuiDialog> CreateOverheatHud(rex::ui::ImGuiDrawer* dr
 std::unique_ptr<rex::ui::ImGuiDialog> CreateModsOverlay(
     rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user_root);
 
+// Evolution progress readout, top left (dev_keys.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEvolutionHud(rex::ui::ImGuiDrawer* drawer);
+
 // Rear rim readout in the upgrade shop (staggered_wheels.cpp).
 std::unique_ptr<rex::ui::ImGuiDialog> CreateStaggerHud(rex::ui::ImGuiDrawer* drawer);
 
@@ -297,5 +300,6 @@ void Fm4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   stagger_hud_ = CreateStaggerHud(drawer);
   if (runtime()) rim_picker_ = CreateRimPicker(drawer, runtime()->user_data_root());
   overheat_hud_ = CreateOverheatHud(drawer);
+  evo_hud_ = CreateEvolutionHud(drawer);
   if (runtime()) mods_overlay_ = CreateModsOverlay(drawer, runtime()->user_data_root());
 }
