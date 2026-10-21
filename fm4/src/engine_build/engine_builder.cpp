@@ -228,16 +228,17 @@ void QueueReads(int garage) {
              std::to_string(s);
   build += " FROM {P}Evolution_EngineBuild WHERE GarageId=" + gid;
   EvoDbRead(build.c_str(), kBuildCols, kNumSlots, &OnBuild);
-  // Career_Garage names its upgrade columns after the List_UpgradeEngine* tables (Camshaft, Valves, ...).
+  // Career_Garage's forced-induction columns (gamedb NewProfile_Career_Garage): SingleTurbo, TwinTurbo, QuadTurbo,
+  // SuperchargerDSC, SuperchargerCSC; they hold List_UpgradeEngine{TurboSingle,TurboTwin,TurboQuad,DSC,CSC} ids.
   static constexpr const char* kFiCols[] = {"FI"};
   const std::string fi =
       "SELECT CASE WHEN COALESCE(ts.IsStock,1)=0 OR COALESCE(tt.IsStock,1)=0 OR COALESCE(tq.IsStock,1)=0 "
       "OR COALESCE(ds.IsStock,1)=0 OR COALESCE(cs.IsStock,1)=0 THEN 1 ELSE 0 END AS FI FROM {P}Career_Garage g "
-      "LEFT JOIN List_UpgradeEngineTurboSingle ts ON ts.Id=g.TurboSingle "
-      "LEFT JOIN List_UpgradeEngineTurboTwin tt ON tt.Id=g.TurboTwin "
-      "LEFT JOIN List_UpgradeEngineTurboQuad tq ON tq.Id=g.TurboQuad "
-      "LEFT JOIN List_UpgradeEngineDSC ds ON ds.Id=g.DSC "
-      "LEFT JOIN List_UpgradeEngineCSC cs ON cs.Id=g.CSC "
+      "LEFT JOIN List_UpgradeEngineTurboSingle ts ON ts.Id=g.SingleTurbo "
+      "LEFT JOIN List_UpgradeEngineTurboTwin tt ON tt.Id=g.TwinTurbo "
+      "LEFT JOIN List_UpgradeEngineTurboQuad tq ON tq.Id=g.QuadTurbo "
+      "LEFT JOIN List_UpgradeEngineDSC ds ON ds.Id=g.SuperchargerDSC "
+      "LEFT JOIN List_UpgradeEngineCSC cs ON cs.Id=g.SuperchargerCSC "
       "WHERE g.Id=" + gid + " LIMIT 1";
   EvoDbRead(fi.c_str(), kFiCols, 1, &OnForced);
 }
