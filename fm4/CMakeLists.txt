@@ -19,6 +19,16 @@ set(FM4_SOURCES
     src/buy_stage.cpp
     src/overheat.cpp
     src/mods_menu.cpp
+    src/garage_menu.cpp
+    src/part_tune.cpp
+    src/engine_build/dyno.cpp
+    src/engine_build/catalogue.cpp
+    src/engine_build/engine_builder.cpp
+    src/engine_build/builder_ui.cpp
+    src/used_lot.cpp
+    src/used_lot_names.cpp
+    src/shop_filter.cpp
+    src/used_lot_overlay.cpp
     src/staggered_wheels.cpp
     src/rim_picker.cpp
     src/d3d_probe.cpp

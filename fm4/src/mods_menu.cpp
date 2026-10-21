@@ -65,6 +65,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -298,7 +299,54 @@ bool ModsMenuInput(PPCRegister& r3) {
 }
 
 // Localized-string GetText. True = we answered (r3 = UTF-16BE text).
+bool GarageMenuText(PPCRegister& r3);  // garage_menu.cpp: BRAND CENTRAL / USED CAR DEALERSHIP
+bool GarageMenuUserEnabled();          // garage_menu.cpp: Brand Central / Used Car Dealership toggle
+void GarageMenuSetUserEnabled(bool on);
+bool EngineReliabilityEnabled();       // overheat.cpp: engine reliability toggle
+void EngineReliabilitySetEnabled(bool on);
+bool EvoUnlockEnabled();               // dev_keys.cpp: Evolution decade unlock + HUD switches
+void EvoUnlockSetEnabled(bool on);
+bool EvoContractEnabled();             // dev_keys.cpp: contract-out switch
+void EvoContractSetEnabled(bool on);
+void EvoContractOut(int decade);
+int EvoContractLastResult();
+int EvoContractOwed();
+bool EvoHudVisible();
+void EvoHudSetVisible(bool on);
+bool EvoIntroUserEnabled();            // dev_keys.cpp: Evolution intro popup
+void EvoIntroSetUserEnabled(bool on);
+void EvoIntroShowAgain();
+bool EvoIntroShowAgainPending();
+bool PrizeNoLevelGiftsEnabled();       // hooks.cpp: Game Levelling switches
+void PrizeNoLevelGiftsSetEnabled(bool on);
+bool PrizeEventCarsEnabled();
+void PrizeEventCarsSetEnabled(bool on);
+bool PrizeMilestonesEnabled();
+void PrizeMilestonesSetEnabled(bool on);
+bool PrizeOnlyFilterEnabled();
+void PrizeOnlyFilterSetEnabled(bool on);
+bool PrizeNoSellEnabled();
+void PrizeNoSellSetEnabled(bool on);
+bool PartTuneEnabled();                // part_tune.cpp: Performance Parts switches
+void PartTuneSetEnabled(bool on);
+bool PartWearEnabled();
+void PartWearSetEnabled(bool on);
+bool UsedLotRotationUserEnabled();
+void UsedLotSetRotationUserEnabled(bool on);
+bool ShopEraLockEnabled();
+void ShopEraLockSetEnabled(bool on);
+bool ShopRareEnabled();
+void ShopRareSetEnabled(bool on);
+bool ShopStockVaryEnabled();
+void ShopStockVarySetEnabled(bool on);
+bool UsedLotMileageNamesEnabled();
+void UsedLotMileageNamesSetEnabled(bool on);
+bool UsedLotOverlayEnabled();
+void UsedLotOverlaySetEnabled(bool on);
+bool UsedLotRevealEnabled();
+void UsedLotRevealSetEnabled(bool on);
 bool ModsMenuText(PPCRegister& r3) {
+  if (GarageMenuText(r3)) return true;
   if (!g_scratch) return false;
   const uint32_t id = Load32(r3.u32 + 8);
   if (id < kTextIdBase || id >= kTextIdBase + kNumLabels) return false;
@@ -460,7 +508,7 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
       ImGui::SameLine();
       if (ImGui::Button(tab_ == 1 ? "[ FEATURES ]" : "  FEATURES  ")) tab_ = 1;
       ImGui::SameLine();
-      ImGui::TextDisabled("   LB/RB switch tab   D-pad select   B / Esc close");
+      ImGui::TextDisabled("   LB/RB switch tab   D-pad select   A toggle (Features)   B / Esc close");
       ImGui::Separator();
       if (tab_ == 0) DrawPacks(size); else DrawFeatures();
       ImGui::PopFont();
@@ -471,7 +519,7 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
 
  private:
   static constexpr uint16_t kPadUp = 0x0001, kPadDown = 0x0002, kPadLB = 0x0100, kPadRB = 0x0200,
-                            kPadB = 0x2000;
+                            kPadA = 0x1000, kPadB = 0x2000;
 
   // Newly pressed pad buttons (any controller), XInput bit layout.
   uint16_t PollPad() {
@@ -551,6 +599,82 @@ class ModsOverlay : public rex::ui::ImGuiDialog {
   }
 
   void DrawFeatures() {
+    bool garage = GarageMenuUserEnabled();
+    if (ImGui::Checkbox("Brand Central / Used Car Dealership in the CARS menu (off = stock Buy Cars; next menu open)", &garage))
+      GarageMenuSetUserEnabled(garage);
+    bool rel = EngineReliabilityEnabled();
+    if (ImGui::Checkbox("Engine reliability (heat, wear, faults; damage only in Simulation damage mode)", &rel))
+      EngineReliabilitySetEnabled(rel);
+    bool gifts = PrizeNoLevelGiftsEnabled();
+    if (ImGui::Checkbox("Evolution: no gift car on level-up (live)", &gifts)) PrizeNoLevelGiftsSetEnabled(gifts);
+    bool evcars = PrizeEventCarsEnabled();
+    if (ImGui::Checkbox("Evolution: prize car for completing an event (live)", &evcars)) PrizeEventCarsSetEnabled(evcars);
+    bool miles = PrizeMilestonesEnabled();
+    if (ImGui::Checkbox("Evolution: car at driver level 10/20/30/40/50 (live)", &miles)) PrizeMilestonesSetEnabled(miles);
+    bool intro = EvoIntroUserEnabled();
+    if (ImGui::Checkbox("Evolution: intro popup the first time the Event List opens (live)", &intro))
+      EvoIntroSetUserEnabled(intro);
+    ImGui::SameLine();
+    if (EvoIntroShowAgainPending()) ImGui::TextDisabled("[ shows on the next Event List open ]");
+    else if (ImGui::SmallButton("Show intro again")) EvoIntroShowAgain();
+    bool pfilt = PrizeOnlyFilterEnabled();
+    if (ImGui::Checkbox("Evolution: hide prize-only works cars from Buy Cars / used lot (next list open)", &pfilt))
+      PrizeOnlyFilterSetEnabled(pfilt);
+    bool sell0 = PrizeNoSellEnabled();
+    if (ImGui::Checkbox("Evolution: prize cars and works variants sell for 0 credits (live)", &sell0)) PrizeNoSellSetEnabled(sell0);
+    bool ptune = PartTuneEnabled();
+    if (ImGui::Checkbox("Part tuning character (brand/size power-curve shape)", &ptune)) PartTuneSetEnabled(ptune);
+    bool pwear = PartWearEnabled();
+    if (ImGui::Checkbox("Engine wear (age/mileage power loss)", &pwear)) PartWearSetEnabled(pwear);
+    bool ulot = UsedLotRotationUserEnabled();
+    if (ImGui::Checkbox("Rotating used lot (new stock after each finished event; applies at the next roll)", &ulot)) UsedLotSetRotationUserEnabled(ulot);
+    bool shop_era = ShopEraLockEnabled();
+    if (ImGui::Checkbox("Shop: era-locked parts (higher tiers and later-decade part types appear as decades open; next pass)", &shop_era)) ShopEraLockSetEnabled(shop_era);
+    bool shop_rare = ShopRareEnabled();
+    if (ImGui::Checkbox("Shop: rare parts (only some are on sale at a time)", &shop_rare)) ShopRareSetEnabled(shop_rare);
+    bool shop_vary = ShopStockVaryEnabled();
+    if (ImGui::Checkbox("Shop: stock varies after finished events (rare parts re-roll; sparse / normal / flooded days)", &shop_vary)) ShopStockVarySetEnabled(shop_vary);
+    bool lot_names = UsedLotMileageNamesEnabled();
+    if (ImGui::Checkbox("Used lot: mileage in the listing name (English; next list open)", &lot_names)) UsedLotMileageNamesSetEnabled(lot_names);
+    bool ulov = UsedLotOverlayEnabled();
+    if (ImGui::Checkbox("Used lot: status box next to the price (mileage, owners, condition)", &ulov)) UsedLotOverlaySetEnabled(ulov);
+    bool ulrev = UsedLotRevealEnabled();
+    if (ImGui::Checkbox("Used lot: reveal hidden condition before buying", &ulrev)) UsedLotRevealSetEnabled(ulrev);
+    bool evo_unlock = EvoUnlockEnabled();
+    if (ImGui::Checkbox("Evolution decade unlock (next decade opens after a championship + 4 events; off = columns stay as they are)", &evo_unlock))
+      EvoUnlockSetEnabled(evo_unlock);
+    bool evo_contract = EvoContractEnabled();
+    if (ImGui::Checkbox("Evolution contract-out (skip a decade, repay 50% of winnings)", &evo_contract))
+      EvoContractSetEnabled(evo_contract);
+    if (evo_contract) {
+      static const char* const kDecades[] = {"1960s", "1970s", "1980s", "1990s", "2000s", "2010s"};
+      static const int kFees[] = {10000, 15000, 20000, 30000, 40000, 50000};
+      static int confirm = -1;
+      static bool requested = false;  // LastResult is 0 until the first request, so show status only after one
+      ImGui::TextUnformatted("  Skip a decade (fee is taken from future winnings):");
+      for (int d = 0; d < 6; ++d) {
+        ImGui::SameLine();
+        char label[48];
+        std::snprintf(label, sizeof(label), "%s##skip%d", kDecades[d], d);
+        if (ImGui::SmallButton(label)) confirm = d;
+      }
+      if (confirm >= 0) {
+        ImGui::Text("  Skip the %s for $%d, repaid as 50%% of winnings?", kDecades[confirm], kFees[confirm]);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Sign")) { EvoContractOut(confirm); requested = true; confirm = -1; }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Cancel")) confirm = -1;
+      }
+      const int res = EvoContractLastResult();
+      if (!requested) {}
+      else if (res == 0) ImGui::TextUnformatted("  Signing ...");
+      else if (res == 1) ImGui::Text("  Signed, owe $%d", EvoContractOwed());
+      else if (res == 2) ImGui::TextUnformatted("  Refused (already owing, already skipped, or off)");
+    }
+    bool evo_hud = EvoHudVisible();
+    if (ImGui::Checkbox("Evolution HUD (top-left progress readout)", &evo_hud))
+      EvoHudSetVisible(evo_hud);
+    ImGui::Separator();
     ImGui::TextWrapped("Feature switches are environment variables read at startup "
                        "(set them in the launcher .bat). Shown here read-only.");
     ImGui::Separator();

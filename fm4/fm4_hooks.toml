@@ -227,6 +227,21 @@ name = "DevKeysEventHighlighted"
 address = 0x824F4344
 registers = ["r3"]
 
+# Evolution intro popup (dev_keys.cpp). FM4_EVO_INTRO=0 or FM4_EVO=0 = off.
+# Event List screen CCareerEventSelect (vtable 0x82032564), slot 5 entry: the
+# screen is being entered; queue the once-per-profile intro check.
+[[midasm_hook]]
+name = "EvoIntroEventListEnter"
+address = 0x824EDE00
+registers = ["r3"]
+
+# Same screen, slot 9 entry = input handler: skipped while the intro is open.
+[[midasm_hook]]
+name = "EvoIntroInput"
+address = 0x824FBED8
+registers = ["r3"]
+return_on_true = true
+
 # Real AI driver pool (fm4/src/hooks.cpp, pack tools/dlc/make_ai_drivers_pack.py):
 # career grid AI query "... WHERE RegionID=%d AND Rank=%d" gets ORDER BY RANDOM(),
 # so every driver sharing a region and rank can be picked. FM4_AI_DRIVER_POOL=0 disables.
@@ -399,40 +414,24 @@ address = 0x82AA4750
 registers = ["r30"]
 after_instruction = true
 
-# Buy Cars on the main-menu stage (fm4/src/buy_stage.cpp, stage 1 spike).
-# CCarSelect setup (sub_824EF1E8), right after `li r4,3`: replace the screen
-# mode 3 (UI_NoCar) with the homespace mode (FM4_BUYCARS_STAGE_MODE, default 6).
+# Buy Cars list highlight tracker (fm4/src/buy_stage.cpp, used by the used lot status box).
+# CCarSelect setup (sub_824EF1E8), right after `li r4,3`: the list screen is opening.
 [[midasm_hook]]
 name = "BuyStageMode"
 address = 0x824EF21C
 registers = ["r4", "r31"]
 
-# Diagnostic: log SetCar (sub_824DEA38) calls while that list is open
-# (runs after the first instruction, so r12 = the caller).
-[[midasm_hook]]
-name = "BuyStageSetCar"
-address = 0x824DEA38
-registers = ["r3", "r4", "r12"]
-after_instruction = true
-
-# Buy Cars stage, stage 2 (fm4/src/buy_stage.cpp): show the highlighted car.
 # CCarSelect focus handler (sub_824FC670): r28 = highlighted car Id, r31 = screen.
 [[midasm_hook]]
 name = "BuyStageHighlight"
 address = 0x824FC6D0
 registers = ["r28", "r31"]
 
-# Main game loop, once per frame (the dev keys hook the instruction before).
-[[midasm_hook]]
-name = "BuyStageFrame"
-address = 0x822F7884
-registers = ["r1", "r13", "fpscr"]
-
-# Mode setter entry (sub_824FFA48): another screen opened, undo our stage changes.
+# Mode setter entry (sub_824FFA48): another screen opened, the buy list is closed.
 [[midasm_hook]]
 name = "BuyStageModeSet"
 address = 0x824FFA48
-registers = ["r4", "r1", "r13", "fpscr"]
+registers = ["r4"]
 
 # Attempt 3: log + skip bad slots in the sub_8284E708 destructor and dump the node (hooks.cpp).
 [[midasm_hook]]
@@ -546,19 +545,6 @@ name = "MaxCarsR31ProbeD"
 address = 0x826994E8
 registers = ["r1", "r28"]
 
-# Buy Cars: colour screen (shown after choosing a car) uses the 3/4 camera instead of the rear view.
-[[midasm_hook]]
-name = "BuyStageColorInit"
-address = 0x8250BA70
-registers = ["r1", "r13", "fpscr"]
-
-# Buy Cars: EXPERIMENTAL direct buy on A (skips the colour screen). Returns true = skip the screen change.
-[[midasm_hook]]
-name = "BuyStageDirectBuy"
-address = 0x8250D200
-registers = ["r28", "r31", "r1", "r13", "fpscr"]
-jump_address_on_true = 0x8250D224
-
 # Attempt 3f: cap the list copy at 16 entries for the caller whose stack buffer holds 16 (hooks.cpp).
 [[midasm_hook]]
 name = "MaxCarsListCap"
@@ -619,6 +605,41 @@ name = "ModsMenuText"
 address = 0x823804E8
 registers = ["r3"]
 return_on_true = true
+
+# ---------------------------------------------------------------------------
+# Home-screen CARS menu: BRAND CENTRAL + USED CAR DEALERSHIP (fm4/src/garage_menu.cpp).
+# Labels come through ModsMenuText. FM4_EVO=0 or FM4_GARAGE_MENU=0 = off.
+# ---------------------------------------------------------------------------
+# Builder 0x825896B8: r5 = IDS_Buy_Cars id, just loaded for item 9's label.
+[[midasm_hook]]
+name = "GarageMenuRelabel"
+address = 0x82589910
+registers = ["r5"]
+after_instruction = true
+
+# Builder 0x825896B8: BUY CARS added, TAKE PHOTO next; r30 = CARS submenu.
+[[midasm_hook]]
+name = "GarageMenuAdd"
+address = 0x82589958
+registers = ["r1", "r13", "fpscr", "r30"]
+
+# Pick handler 0x82591398, before "mr r31,r4": r4 = item id (27 -> 9).
+[[midasm_hook]]
+name = "GarageMenuSelect"
+address = 0x825913AC
+registers = ["r4"]
+
+# Used dealership price: list row builder, right after bl 0x823F2BA0 (r3 = price, r29 = car id).
+[[midasm_hook]]
+name = "GarageMenuListPrice"
+address = 0x8250BF0C
+registers = ["r3", "r29"]
+
+# Used dealership price: purchase function, right after bl 0x823F2BA0 (r3 = price, r31 = car id).
+[[midasm_hook]]
+name = "GarageMenuBuyPrice"
+address = 0x82433278
+registers = ["r3", "r31"]
 
 # ---------------------------------------------------------------------------
 # Staggered wheels: separate front and rear rims (staggered_wheels.cpp,
@@ -806,3 +827,33 @@ name = "McarDestroyAll"
 address = 0x824DD85C
 registers = ["r31", "r1"]
 jump_address_on_true = 0x824DD860
+
+# Evolution: prize cars sell for 0 credits (hooks.cpp, fm4_evo_no_sell_prize_cars). Sell value
+# sub_82409368(r3 = garage table, r4 = garage Id) runs "SELECT CarId, Flags, PartsValue FROM %s WHERE Id=%u"
+# (formatted at r1+192) and returns "mr r3,r31" at 0x82409554.
+# 0x8240947C (no Flags & 2 path): r3 = the CarId just read (works variants 12800-12899).
+[[midasm_hook]]
+name = "SellValueSeeCarId"
+address = 0x8240947C
+registers = ["r3"]
+
+# 0x82409554: r31 = sell value about to be returned; r1+192 still holds the formatted query (garage Id).
+[[midasm_hook]]
+name = "SellValueResult"
+address = 0x82409554
+registers = ["r1", "r31"]
+
+# Used lot purchase (used_lot.cpp): purchase function sub_82433230, at loc_824332D8. The car was just added to the
+# garage (credits checked, not yet debited); r31 = the bought car id. Takes the listing out of the lot.
+[[midasm_hook]]
+name = "UsedLotBought"
+address = 0x824332D8
+registers = ["r31"]
+
+# Evolution contract-out (hooks.cpp ContractPayoutDeduct): sub_8249CE20 credits a race result, "add r4,r3,r11"
+# at 0x8249CE60 adds r11 = [r29+84] (race winnings) to the current credits before SetCredits 0x82405FC0.
+# The handler lowers r11 by the contract cut for Evolution events only.
+[[midasm_hook]]
+name = "ContractPayoutDeduct"
+address = 0x8249CE60
+registers = ["r11", "r29"]

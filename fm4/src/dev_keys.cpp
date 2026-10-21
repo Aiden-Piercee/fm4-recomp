@@ -51,12 +51,17 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <Xinput.h>
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "xinput.lib")
 #else
 constexpr int VK_SHIFT = 0x10, VK_F6 = 0x75, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 = 0x79, VK_F11 = 0x7A;
 #endif
 
 #include <rex/ppc.h>
+#include <imgui.h>
+#include <rex/ui/imgui_dialog.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xmemory.h>
@@ -64,10 +69,32 @@ constexpr int VK_SHIFT = 0x10, VK_F6 = 0x75, VK_F8 = 0x77, VK_F9 = 0x78, VK_F10 
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <vector>
+
+// Live switches: F4 > Forza Motorsport 4/Evolution ("Save to config" keeps them in fm4.toml) and the Mods menu FEATURES
+// tab (getters/setters at the end of this file). Read every time the code runs, no restart. FM4_EVO_HUD=0 turns the HUD off at startup.
+REXCVAR_DEFINE_BOOL(fm4_evo_unlock, true, "Forza Motorsport 4/Evolution",
+                    "Evolution: open the next decade's events after a decade's championship and four other events (off = columns stay as they are)");
+REXCVAR_DEFINE_BOOL(fm4_evo_contract, true, "Forza Motorsport 4/Evolution",
+                    "Evolution: allow contract-out (pay a fee from future race earnings to skip a decade)");
+REXCVAR_DEFINE_BOOL(fm4_evo_hud, true, "Forza Motorsport 4/Evolution",
+                    "Evolution: top-left progress readout (XP, level, one line per decade)");
+
+using PartTuneQueryFn = int (*)(const char* sql, double* out, int max_rows, int max_cols);
+void PartTuneSetQuery(PartTuneQueryFn fn);  // part_tune.cpp
+void EvoDbQueue(const char* sql);  // defined below, outside the anonymous namespace
+void ShopFilterInit();  // shop_filter.cpp: registers its per-frame tick (idempotent)
+void UsedLotOverlayDraw(ImGuiIO& io);  // used_lot_overlay.cpp
+void PartTuneSetPlayerGarage(int garage_id, const char* profile_prefix);
+bool PartTuneEnabled();
+bool PartWearEnabled();
 
 namespace {
 
@@ -173,7 +200,8 @@ class Guest {
 
   bool ok() const { return ok_; }
 
-  uint32_t Call(uint32_t target, uint32_t a = 0, uint32_t b = 0, uint32_t c = 0, uint32_t d = 0) {
+  // b is 64-bit for the profile flag functions, whose mask argument (r4) is a full 64-bit register.
+  uint32_t Call(uint32_t target, uint32_t a = 0, uint64_t b = 0, uint32_t c = 0, uint32_t d = 0) {
     if (!ok_ || !target) { ok_ = false; return 0; }
     static_assert(sizeof(PPCContext) <= sizeof(saved_));
     std::memcpy(saved_, static_cast<void*>(ctx_), sizeof(PPCContext));
@@ -513,7 +541,677 @@ bool EnsureScratch() {
   return true;
 }
 
+// ---- Evolution mode: progress tracking, decade unlock, T3 XP log, HUD state -------------------------------------
+// Decade columns, 1960s-2020s, twenty events each: decade d holds Events 2000+200*d .. 2019+200*d, the last one is the
+// decade's gate championship. The 1960s are always open; every later column ships locked (Level 99). Decade d+1 opens
+// (Level 0) when decade d is open and either (its gate championship is completed and at least four of its other
+// eighteen events are completed in the active profile) or a contract-out was signed for it (see below); otherwise it
+// is set back to 99. Contract-out: the player pays Evolution_SkipFee(Decade) out of future earnings (the payout hook
+// calls EvoContractDeduct) instead of qualifying; one open contract at a time, kept in {P}Evolution_Contract. EvoTick does this through the game's database
+// layer. Events.Level is read by the Event List every time it is built, so the change shows the next time the list
+// opens. A decade with no events in the pack yet is skipped (placeholder events can be added later).
+constexpr int kEvoDecades = 7, kEvoFirstId = 2000, kEvoIdStride = 200, kEvoEventsPerDecade = 20;
+constexpr int kEvoNeedOthers = 4, kEvoLockLevel = 99;
+int EvoFirstId(int d) { return kEvoFirstId + kEvoIdStride * d; }
+int EvoChampId(int d) { return EvoFirstId(d) + kEvoEventsPerDecade - 1; }
+
+struct EvoHudState {
+  bool have = false;           // at least one successful tick
+  uint32_t xp = 0, level = 0;  // Main/XP, Main/Level
+  int others[kEvoDecades] = {};       // completed non-championship events per decade
+  bool champ[kEvoDecades] = {};       // decade championship completed
+  bool skipped[kEvoDecades] = {};     // decade skipped through a contract-out
+  int owed = 0;                       // money still owed on the open contract (0 = none)
+  int lock_level[kEvoDecades] = {};   // current Events.Level of each decade column (-1 not in the pack)
+  int write = 0;               // 0 none, 1 unlock/relock written, 2 write FAILED
+  uint32_t last_event = 0;     // last recorded race result
+  int last_place = 0;
+  long long last_tick_ms = 0;
+  std::string last_why;
+};
+std::mutex g_evo_mu;
+EvoHudState g_evo;
+std::atomic<int> g_evo_contract_req{-1};     // decade to contract out of, set by EvoContractOut, consumed by EvoTick
+std::atomic<int> g_evo_contract_result{0};   // 0 none, 1 signed, 2 refused (last request)
+
+std::atomic<long long> g_evo_xp_note_ms{0};
+std::atomic<int> g_evo_xp_polls_done{3};
+long long g_evo_boot_next_ms = 0;
+int g_evo_boot_tries = 0;
+bool g_evo_boot_done = false;
+long long EvoNowMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+bool EvoEnabled() {
+  static const bool enabled = [] {
+    const char* v = std::getenv("FM4_EVO");
+    return !(v && v[0] == '0');
+  }();
+  return enabled;
+}
+
+// One progress check + XP log + lock/unlock of every decade column. Runs on the game thread inside DevKeysFrame.
+bool EvoTick(Guest& g, const char* why) {
+  const uint32_t data = ProfileData(g);
+  if (!data) return false;
+  const uint32_t profile = g.Call(kFnGetProfile, Load32(kProfileMgrGlobal));
+  if (!g.ok() || !profile) return false;
+  const std::string prefix = ProfilePrefix(profile);
+  if (prefix.empty()) return false;
+  EvoHudState st;
+  st.xp = GetSetting(g, data, "Main/XP");
+  st.level = GetSetting(g, data, "Main/Level");
+  if (!g.ok()) return false;
+  Db db(g);
+  const std::string tbl = prefix + "Career_EventResults";
+  const std::string done = " AND Place BETWEEN 1 AND 16";  // 17 = not every race of the event has a result
+  const std::string ctr = prefix + "Evolution_Contract";
+  db.Exec("CREATE TABLE IF NOT EXISTS " + ctr + " (Decade INTEGER PRIMARY KEY, Fee INTEGER, Owed INTEGER)");
+  st.owed = std::max(0, db.QueryInt("SELECT COALESCE(SUM(Owed),0) AS V FROM " + ctr, "V"));
+  const int req = g_evo_contract_req.exchange(-1);
+  if (req >= 0 && req < kEvoDecades - 1) {
+    // decade req may be skipped when it is open, not already skipped, nothing is owed, and the fee exists
+    const int fee = db.QueryInt("SELECT Fee AS V FROM Evolution_SkipFee WHERE Decade=" + std::to_string(req), "V");
+    const int have = db.QueryInt("SELECT COUNT(*) AS V FROM " + ctr + " WHERE Decade=" + std::to_string(req), "V");
+    const bool ok = g.ok() && REXCVAR_GET(fm4_evo_contract) && fee > 0 && have == 0 && st.owed == 0;
+    if (ok) {
+      db.Exec("INSERT INTO " + ctr + " (Decade, Fee, Owed) VALUES (" + std::to_string(req) + "," + std::to_string(fee) + "," +
+              std::to_string(fee) + ")");
+      st.owed = fee;
+    }
+    g_evo_contract_result = ok ? 1 : 2;
+    REXLOG_INFO("Evolution: contract-out of the {}s {} (fee {}, owed {})", 1960 + 10 * req, ok ? "SIGNED" : "refused", fee, st.owed);
+  }
+  for (int d = 0; d < kEvoDecades; ++d)
+    st.skipped[d] = db.QueryInt("SELECT COUNT(*) AS V FROM " + ctr + " WHERE Decade=" + std::to_string(d), "V") > 0;
+  bool prev_open = true;  // the 1960s are always open
+  int unlocked_through = 0;
+  for (int d = 0; d < kEvoDecades; ++d) {
+    const int first = EvoFirstId(d), champ_id = EvoChampId(d);
+    st.others[d] = std::max(0, db.QueryInt("SELECT COUNT(*) AS V FROM " + tbl + " WHERE EventId BETWEEN " +
+                                           std::to_string(first) + " AND " + std::to_string(champ_id - 1) + done, "V"));
+    st.champ[d] = db.QueryInt("SELECT COUNT(*) AS V FROM " + tbl + " WHERE EventId=" + std::to_string(champ_id) + done, "V") > 0;
+    const bool want_open = d == 0 || prev_open;
+    if (d > 0) {
+      const std::string range = " Id BETWEEN " + std::to_string(first) + " AND " + std::to_string(champ_id);
+      int cur = db.QueryInt("SELECT MIN(Level) AS V FROM Events WHERE" + range, "V");
+      if (!g.ok()) return false;
+      if (cur >= 0 && (want_open ? cur != 0 : cur != kEvoLockLevel)) {
+        db.Exec("UPDATE Events SET Level=" + std::to_string(want_open ? 0 : kEvoLockLevel) + " WHERE" + range);
+        const int after = db.QueryInt("SELECT MIN(Level) AS V FROM Events WHERE" + range, "V");
+        st.write = (after == (want_open ? 0 : kEvoLockLevel)) ? 1 : 2;
+        cur = after;
+        REXLOG_INFO("Evolution: {}s column {} (previous decade: others {}/{} + championship {}), write {}", 1960 + 10 * d,
+                    want_open ? "UNLOCKED" : "re-locked", st.others[d - 1], kEvoNeedOthers,
+                    st.champ[d - 1] ? "done" : "not done", st.write == 1 ? "ok" : "FAILED");
+      }
+      st.lock_level[d] = cur;
+    } else {
+      st.lock_level[d] = 0;
+    }
+    if (want_open) unlocked_through = d;
+    // decade d+1 may open only if decade d is open and qualifies
+    prev_open = want_open && ((st.champ[d] && st.others[d] >= kEvoNeedOthers) || st.skipped[d]);
+  }
+  st.have = true;
+  st.last_tick_ms = EvoNowMs();
+  st.last_why = why;
+  {
+    std::lock_guard<std::mutex> lock(g_evo_mu);
+    st.last_event = g_evo.last_event;
+    st.last_place = g_evo.last_place;
+    if (st.write == 0) st.write = g_evo.write;
+    g_evo = st;
+  }
+  REXLOG_INFO("Evolution T3: {}, Main/XP={} Main/Level={}; open through the {}s; 1960s others {}/{} championship {}", why,
+              st.xp, st.level, 1960 + 10 * unlocked_through, st.others[0], kEvoNeedOthers, st.champ[0] ? "done" : "no");
+  return true;
+}
+
+void EvoPoll(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  if (!EvoEnabled() || !REXCVAR_GET(fm4_evo_unlock) || g_faulted) return;
+  const long long now = EvoNowMs();
+  const char* why = nullptr;
+  bool startup = false;
+  if (!g_evo_boot_done && g_evo_boot_tries < 90 && now >= g_evo_boot_next_ms) {
+    g_evo_boot_next_ms = now + 10000;
+    ++g_evo_boot_tries;
+    why = "startup check";
+    startup = true;
+  }
+  static const long long kDelayMs[3] = {2000, 6000, 15000};
+  const int polls = g_evo_xp_polls_done.load();
+  const long long note = g_evo_xp_note_ms.load();
+  if (polls < 3 && note && now - note >= kDelayMs[polls]) {
+    g_evo_xp_polls_done = polls + 1;
+    why = "after the race result";
+    startup = false;
+  }
+  if (!why) return;
+  if (!EnsureScratch()) return;
+  Guest g(r1, r13, fpscr);
+  const bool ok = EvoTick(g, why);
+  if (!g.ok()) { g_faulted = true; return; }
+  if (ok && startup) g_evo_boot_done = true;
+}
+
+// Small always-on readout, top left, for tracking Evolution state while testing. FM4_EVO_HUD=0 hides it.
+class EvolutionHud : public rex::ui::ImGuiDialog {
+ public:
+  explicit EvolutionHud(rex::ui::ImGuiDrawer* drawer) : rex::ui::ImGuiDialog(drawer) {}
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    UsedLotOverlayDraw(io);  // before the HUD switch so it shows with the HUD hidden
+    if (!REXCVAR_GET(fm4_evo_hud)) return;
+    EvoHudState s;
+    {
+      std::lock_guard<std::mutex> lock(g_evo_mu);
+      s = g_evo;
+    }
+    const float scale = std::max(0.6f, io.DisplaySize.y / 1080.0f);
+    ImGui::SetNextWindowPos(ImVec2(8.0f * scale, 8.0f * scale), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                   ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize;
+    if (!ImGui::Begin("##fm4_evo_hud", nullptr, flags)) { ImGui::End(); return; }
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.1f * scale);
+    ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.0f, 1.0f), "EVOLUTION  build: AI 15, decades 1960s-2020s");
+    if (!s.have) {
+      ImGui::TextDisabled("waiting for a profile ...");
+    } else {
+      ImGui::Text("XP %u   Level %u", s.xp, s.level);
+      for (int d = 0; d < kEvoDecades; ++d) {
+        const bool qualified = (s.champ[d] && s.others[d] >= kEvoNeedOthers) || s.skipped[d];
+        const bool open = s.lock_level[d] == 0;
+        ImGui::TextColored(open ? (qualified ? ImVec4(0.55f, 0.95f, 0.55f, 1.0f) : ImVec4(1.0f, 0.8f, 0.3f, 1.0f))
+                                : ImVec4(1.0f, 0.45f, 0.4f, 1.0f),
+                           "%ds: %s  %d/%d + champ %s", 1960 + 10 * d,
+                           s.lock_level[d] < 0 ? "no events" : (open ? "OPEN" : "LOCKED"), s.others[d], kEvoNeedOthers,
+                           s.skipped[d] ? "skipped" : (s.champ[d] ? "done" : "-"));
+      }
+      if (s.write == 2) ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.25f, 1.0f), "lock write FAILED (Events not writable?)");
+      else if (s.write == 1) ImGui::TextDisabled("lock written this session");
+    }
+    if (s.have && s.owed > 0) ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "contract: %d still owed (50%% of payouts)", s.owed);
+    if (s.last_event) ImGui::Text("last result: event %u, place %d", s.last_event, s.last_place);
+    ImGui::PopFont();
+    ImGui::End();
+  }
+};
+
+// ---- Evolution intro popup ----------------------------------------------------------------------------------------
+// Shown once per profile, the first time the profile opens the Event List (CCareerEventSelect, where the Evolution
+// events live) while the Evolution pack's events (2000+) are in the database. Same mechanism as the stock Porsche
+// "FORZA EXPANSION" popup, which CMainMenu (0x8258C8F8) gates on the profile int "Main/Flags" bit 0x10000 and sets on
+// dismiss: our own bit there, read and written with the game's own functions, so the flag is saved inside the
+// profile and new profiles start without it (0x8242F080 zeroes Main/Flags).
+//   0x8251BCD0 ()                   profile flags object (ignores its argument)
+//   0x823E5400 (obj, mask) -> bool  Main/Flags & mask != 0
+//   0x82405A10 (obj, mask, on)      set or clear mask in Main/Flags
+// Bits in use by the game (every constant mask passed to those two and to the show-once helper 0x8251BD30): 0-16,
+// 33-37, 40, 42, 56-62; three callers pass a 32-bit variable. Bit 50 is ours.
+// The panel is ImGui; the Event List's input handler (CCareerEventSelect vtable 0x82032564 slot 9, 0x824FBED8) is
+// skipped while it is open. FM4_EVO_INTRO: 0 = off, force = show on every Event List open, reset = clear the bit once
+// per launch (then normal once-per-profile behaviour).
+constexpr uint32_t kFnProfileFlagsObj = 0x8251BCD0;
+constexpr uint32_t kFnProfileFlagGet = 0x823E5400;
+constexpr uint32_t kFnProfileFlagSet = 0x82405A10;
+constexpr uint64_t kEvoIntroFlag = 1ull << 50;
+
+enum EvoIntroState : int { kIntroIdle = 0, kIntroCheck = 1, kIntroShowing = 2, kIntroDismissed = 3 };
+std::atomic<int> g_intro_state{kIntroIdle};
+std::atomic<long long> g_intro_block_until_ms{0};  // keep swallowing Event List input briefly after closing
+bool g_intro_reset_done = false;
+
+int EvoIntroMode() {  // 0 off, 1 normal, 2 force, 3 reset
+  static const int mode = [] {
+    const char* v = std::getenv("FM4_EVO_INTRO");
+    if (!EvoEnabled() || (v && v[0] == '0')) return 0;
+    if (v && std::strcmp(v, "force") == 0) return 2;
+    if (v && std::strcmp(v, "reset") == 0) return 3;
+    return 1;
+  }();
+  return mode;
+}
+
+// OPTIONS & MODS > FEATURES (mods_menu.cpp): a live on/off switch, starting from FM4_EVO_INTRO, and a one-shot
+// "show intro again" that shows it on the next Event List open even when it was seen or switched off.
+std::atomic<bool> g_intro_user_on{EvoIntroMode() != 0};
+std::atomic<bool> g_intro_force_once{false};
+
+constexpr const char* kIntroTitle = "FORZA EVOLUTION";
+constexpr const char* kIntroBody =
+    "Welcome to Evolution. Your career starts in 1960 with modest credits and a period car. Every event has an entry "
+    "fee and a purse, so a bad result costs you. Win the decade's championship and enough of its events to open the "
+    "next decade. Championships award a random car from that era's race cars. Buy, sell and repair carefully: your "
+    "garage is your career.";
+
+// Main thread, from DevKeysFrame: decide whether to show the panel, and write the flag after it was dismissed.
+void EvoIntroPoll(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  const int state = g_intro_state.load();
+  if (state != kIntroCheck && state != kIntroDismissed) return;
+  if (g_faulted || !EnsureScratch()) { g_intro_state = kIntroIdle; return; }
+  Guest g(r1, r13, fpscr);
+  if (!ProfileData(g)) { g_intro_state = kIntroIdle; return; }  // no profile loaded: try again on the next list open
+  const uint32_t flags = g.Call(kFnProfileFlagsObj);
+  if (!g.ok() || !flags) { g_intro_state = kIntroIdle; return; }
+
+  if (state == kIntroDismissed) {
+    g.Call(kFnProfileFlagSet, flags, kEvoIntroFlag, 1);
+    const bool now_set = (g.Call(kFnProfileFlagGet, flags, kEvoIntroFlag) & 0xFF) != 0;
+    REXLOG_INFO("Evolution intro: dismissed, profile flag {}", g.ok() && now_set ? "set" : "NOT set");
+    g_intro_state = kIntroIdle;
+    return;
+  }
+
+  if (EvoIntroMode() == 3 && !g_intro_reset_done) {
+    g_intro_reset_done = true;
+    g.Call(kFnProfileFlagSet, flags, kEvoIntroFlag, 0);
+    REXLOG_INFO("Evolution intro: FM4_EVO_INTRO=reset, profile flag cleared");
+  }
+  Db db(g);
+  const int evo_events = db.QueryInt("SELECT COUNT(*) AS V FROM Events WHERE Id BETWEEN " +
+                                         std::to_string(kEvoFirstId) + " AND " +
+                                         std::to_string(EvoChampId(kEvoDecades - 1)), "V");
+  const bool seen = (g.Call(kFnProfileFlagGet, flags, kEvoIntroFlag) & 0xFF) != 0;
+  if (!g.ok()) { g_faulted = true; g_intro_state = kIntroIdle; return; }
+  if (evo_events <= 0) {
+    REXLOG_INFO("Evolution intro: skipped, no Evolution events in the database");
+    g_intro_state = kIntroIdle;
+    return;
+  }
+  const bool again = g_intro_force_once.exchange(false);
+  if (!again && !g_intro_user_on.load()) {
+    REXLOG_INFO("Evolution intro: skipped, switched off");
+    g_intro_state = kIntroIdle;
+  } else if (seen && !again && EvoIntroMode() != 2) {
+    REXLOG_INFO("Evolution intro: skipped, already seen on this profile");
+    g_intro_state = kIntroIdle;
+  } else {
+    REXLOG_INFO("Evolution intro: shown{}", again ? " (Show intro again)" : seen ? " (FM4_EVO_INTRO=force)" : "");
+    g_intro_state = kIntroShowing;
+  }
+}
+
+class EvolutionIntro : public rex::ui::ImGuiDialog {
+ public:
+  explicit EvolutionIntro(rex::ui::ImGuiDrawer* drawer) : rex::ui::ImGuiDialog(drawer) {}
+
+ protected:
+  void OnDraw(ImGuiIO& io) override {
+    if (g_intro_state.load() != kIntroShowing) { was_open_ = false; return; }
+    if (!was_open_) {  // just opened: the A press that opened the list may still be down
+      was_open_ = true;
+      prev_buttons_ = 0xFFFF;
+      opened_ms_ = EvoNowMs();
+    }
+    const uint16_t pressed = PollPad();
+    const bool armed = EvoNowMs() - opened_ms_ >= 600;  // a held or repeated press must not close it at once
+    if (armed && ((pressed & (kPadA | kPadB | kPadStart)) || ImGui::IsKeyPressed(ImGuiKey_Enter) ||
+                  ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) || ImGui::IsKeyPressed(ImGuiKey_Space) ||
+                  ImGui::IsKeyPressed(ImGuiKey_Escape))) {
+      was_open_ = false;
+      g_intro_block_until_ms = EvoNowMs() + 400;  // the closing press must not also pick an event
+      g_intro_state = kIntroDismissed;
+      return;
+    }
+
+    const float scale = std::max(0.6f, io.DisplaySize.y / 1080.0f);
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    const ImGuiWindowFlags backdrop = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    ImGui::Begin("##fm4_evo_intro_bg", nullptr, backdrop);
+    ImGui::End();
+
+    const ImVec2 size(std::min(io.DisplaySize.x * 0.9f, 1100.0f * scale), 0.0f);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always,
+                            ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.95f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize;
+    if (ImGui::Begin("##fm4_evo_intro", nullptr, flags)) {
+      const float pad = 28.0f * scale;
+      ImGui::Dummy(ImVec2(0, pad * 0.5f));
+      ImGui::Indent(pad);
+      ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.4f * scale);
+      ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.0f, 1.0f), "%s", kIntroTitle);
+      ImGui::PopFont();
+      ImGui::Dummy(ImVec2(0, pad * 0.4f));
+      ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.35f * scale);
+      ImGui::PushTextWrapPos(size.x - pad);
+      ImGui::TextUnformatted(kIntroBody);
+      ImGui::PopTextWrapPos();
+      ImGui::Dummy(ImVec2(0, pad * 0.6f));
+      ImGui::TextDisabled("A / Enter   Continue");
+      ImGui::PopFont();
+      ImGui::Unindent(pad);
+      ImGui::Dummy(ImVec2(0, pad * 0.5f));
+    }
+    ImGui::End();
+  }
+
+ private:
+  static constexpr uint16_t kPadStart = 0x0010, kPadA = 0x1000, kPadB = 0x2000;
+
+  // Newly pressed pad buttons (any controller), XInput bit layout.
+  uint16_t PollPad() {
+    uint16_t now = 0;
+#ifdef _WIN32
+    for (DWORD i = 0; i < 4; ++i) {
+      XINPUT_STATE st{};
+      if (XInputGetState(i, &st) == ERROR_SUCCESS) now |= st.Gamepad.wButtons;
+    }
+#endif
+    const uint16_t pressed = now & ~prev_buttons_;
+    prev_buttons_ = now;
+    return pressed;
+  }
+
+  bool was_open_ = false;
+  uint16_t prev_buttons_ = 0xFFFF;
+  long long opened_ms_ = 0;
+};
+
+// ---- Evolution database API (writes and first-row reads queued from any thread, run on the game thread) ----------
+struct EvoDbJob {
+  std::string sql;
+  bool read = false;
+  std::vector<std::string> cols;
+  void (*cb)(const int32_t*, int) = nullptr;
+};
+std::mutex g_evodb_mu;
+std::deque<EvoDbJob> g_evodb_q;
+constexpr size_t kEvoDbQueueCap = 256;
+constexpr int kEvoDbJobsPerFrame = 8;
+std::atomic<bool> g_evodb_ready{false};
+std::atomic<uint32_t> g_evodb_gen{0};
+uint32_t g_evodb_last_profile = 0;
+std::string g_evodb_prefix;
+int g_evodb_frame = 0;
+
+// "{P}" -> this profile's table prefix (the one EvoTick uses for Career_EventResults).
+std::string EvoDbSubst(std::string sql, const std::string& prefix) {
+  for (size_t at = sql.find("{P}"); at != std::string::npos; at = sql.find("{P}", at + prefix.size()))
+    sql.replace(at, 3, prefix);
+  return sql;
+}
+
+void EvoDbPush(EvoDbJob&& job) {
+  std::lock_guard<std::mutex> lock(g_evodb_mu);
+  if (g_evodb_q.size() >= kEvoDbQueueCap) {
+    REXLOG_WARN("Evolution DB: queue full, dropping a statement");
+    return;
+  }
+  g_evodb_q.push_back(std::move(job));
+}
+
+// Once per frame from DevKeysFrame (game thread): track which profile is loaded, then run queued jobs.
+void EvoDbPump(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  if (!EvoEnabled() || g_faulted) return;
+  bool pending;
+  {
+    std::lock_guard<std::mutex> lock(g_evodb_mu);
+    pending = !g_evodb_q.empty();
+  }
+  // With no work, look at the profile about once a second so EvoProfileGeneration() still follows a profile switch.
+  if (!pending && (++g_evodb_frame % 60) != 0) return;
+  if (!EnsureScratch()) return;
+  Guest g(r1, r13, fpscr);
+  const uint32_t data = ProfileData(g);
+  const uint32_t profile = data ? g.Call(kFnGetProfile, Load32(kProfileMgrGlobal)) : 0;
+  const std::string prefix = (g.ok() && profile) ? ProfilePrefix(profile) : std::string();
+  if (!g.ok()) { g_faulted = true; return; }
+  if (prefix.empty()) { g_evodb_ready = false; return; }
+  if (profile != g_evodb_last_profile || prefix != g_evodb_prefix) {
+    g_evodb_last_profile = profile;
+    g_evodb_prefix = prefix;
+    ++g_evodb_gen;
+    REXLOG_INFO("Evolution DB: profile {} (generation {})", prefix, g_evodb_gen.load());
+  }
+  g_evodb_ready = true;
+  Db db(g);
+  for (int n = 0; n < kEvoDbJobsPerFrame; ++n) {
+    EvoDbJob job;
+    {
+      std::lock_guard<std::mutex> lock(g_evodb_mu);
+      if (g_evodb_q.empty()) break;
+      job = std::move(g_evodb_q.front());
+      g_evodb_q.pop_front();
+    }
+    const std::string sql = EvoDbSubst(job.sql, prefix);
+    if (!job.read) {
+      db.Exec(sql);
+      if (!g.ok()) { REXLOG_WARN("Evolution DB: statement failed: {}", sql); g_faulted = true; return; }
+      continue;
+    }
+    // Read: first row only, int32 columns by name. cb(vals, ncols); no row or a failed query -> cb(nullptr, 0).
+    const uint32_t q = db.Open(sql);
+    if (!q) { REXLOG_WARN("Evolution DB: query failed: {}", sql); if (job.cb) job.cb(nullptr, 0); continue; }
+    std::vector<int32_t> vals;
+    const bool have_row = !db.AtEnd(q);
+    if (have_row)
+      for (const std::string& col : job.cols) vals.push_back(db.GetInt(q, col));
+    db.Close(q);
+    if (!g.ok()) { g_faulted = true; return; }
+    if (job.cb) job.cb(have_row ? vals.data() : nullptr, have_row ? int(vals.size()) : 0);
+  }
+}
+
+// ---- Evolution per-frame callbacks and race-result signal (for other Evolution code, e.g. the used lot / shop stock) ---
+constexpr int kEvoFrameCbMax = 8;
+void (*g_evo_frame_cbs[kEvoFrameCbMax])() = {};
+int g_evo_frame_cb_n = 0;
+std::mutex g_evo_frame_mu;
+std::atomic<uint32_t> g_evo_result_serial{0};
+std::atomic<uint32_t> g_evo_result_event{0};
+std::atomic<int> g_evo_result_place{0};
+
+// Once per frame from DevKeysFrame (game thread), after the database pump.
+void EvoRunFrameCallbacks() {
+  void (*cbs[kEvoFrameCbMax])();
+  int n;
+  {
+    std::lock_guard<std::mutex> lock(g_evo_frame_mu);
+    n = g_evo_frame_cb_n;
+    for (int i = 0; i < n; ++i) cbs[i] = g_evo_frame_cbs[i];
+  }
+  for (int i = 0; i < n; ++i) cbs[i]();
+}
+
+// ---- Part tuning data (part_tune.cpp) ---------------------------------------------------------------------------
+// part_tune.cpp asks for the player's garage row through a synchronous row reader called from the physics hook, where
+// no guest registers (and so no Db) exist. So the row is read here, on the frame hook, about once a second and when the
+// car changes, and cached; PartTuneQueryCached below answers from the cache. The Db getter only returns integers, so
+// decimals are scaled in SQL (x1000) and divided back. Any failure leaves the cache invalid and the reader returns -1.
+// Query A columns (plain integers): cooling Level, DistanceDriven, CurOwnerNumRaces, NumOwners, TotalRepairs, RedlineRPM.
+// Query B columns (x1000): fuel/cam size ratio, fuel low/mid/high bias. Needs the pack's Evolution_PartTune table.
+struct PartTuneCache {
+  bool a_ok = false, b_ok = false;
+  double a[6] = {}, b[4] = {};
+};
+std::mutex g_ptune_mu;
+PartTuneCache g_ptune;
+int g_ptune_frame = 0;
+int g_ptune_garage = 0;
+std::string g_ptune_prefix;
+
+void PartTunePump(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  if (!EvoEnabled() || g_faulted) return;
+  if (!PartTuneEnabled() && !PartWearEnabled()) return;
+  if ((++g_ptune_frame % 120) != 1) return;
+  if (!EnsureScratch()) return;
+  Guest g(r1, r13, fpscr);
+  const uint32_t data = ProfileData(g);
+  const uint32_t profile = data ? g.Call(kFnGetProfile, Load32(kProfileMgrGlobal)) : 0;
+  const std::string prefix = (g.ok() && profile) ? ProfilePrefix(profile) : std::string();
+  if (!g.ok()) { g_faulted = true; return; }
+  if (prefix.empty()) return;
+  const uint32_t career_car = GetSetting(g, data, "Main/CareerCar");
+  if (!g.ok()) { g_faulted = true; return; }
+  Db db(g);
+  const std::string cc = std::to_string(career_car);
+  const std::string garage_tbl = prefix + "Career_Garage";
+  // Main/CareerCar is unverified as a garage Id or a car Id: a garage row with that Id wins (same order as
+  // AffinityLevelUp), else the first garage row owning that car.
+  int garage = db.QueryInt("SELECT Id AS V FROM " + garage_tbl + " WHERE Id=" + cc, "V");
+  const char* how = "garage Id";
+  if (garage <= 0) {
+    garage = db.QueryInt("SELECT Id AS V FROM " + garage_tbl + " WHERE CarId=" + cc + " ORDER BY Id LIMIT 1", "V");
+    how = "car Id";
+  }
+  if (!g.ok()) { g_faulted = true; return; }
+  if (garage <= 0) {
+    std::lock_guard<std::mutex> lock(g_ptune_mu);
+    g_ptune = PartTuneCache();
+    if (g_ptune_garage != 0) REXLOG_INFO("Evolution part tuning: Main/CareerCar={} matches no garage row", career_car);
+    g_ptune_garage = 0;
+    return;
+  }
+  if (garage != g_ptune_garage || prefix != g_ptune_prefix) {
+    REXLOG_INFO("Evolution part tuning: Main/CareerCar={} -> Career_Garage.Id {} (matched as {})", career_car, garage, how);
+    g_ptune_garage = garage;
+    g_ptune_prefix = prefix;
+    PartTuneSetPlayerGarage(garage, prefix.c_str());
+  }
+  const std::string gid = std::to_string(garage);
+  PartTuneCache c;
+  {
+    const uint32_t q = db.Open(
+        "SELECT CAST(COALESCE(o.Level,0) AS INTEGER) AS C0, CAST(COALESCE(g.DistanceDriven,0) AS INTEGER) AS C1, "
+        "CAST(COALESCE(g.CurOwnerNumRaces,0) AS INTEGER) AS C2, CAST(COALESCE(g.NumOwners,0) AS INTEGER) AS C3, "
+        "CAST(COALESCE(g.TotalRepairs,0) AS INTEGER) AS C4, CAST(COALESCE(cam.RedlineRPM,0) AS INTEGER) AS C5 FROM " +
+        garage_tbl + " g LEFT JOIN List_UpgradeEngineOilCooling o ON o.Id=g.OilCooling "
+        "LEFT JOIN List_UpgradeEngineCamshaft cam ON cam.Id=g.Camshaft WHERE g.Id=" + gid);
+    if (q) {
+      if (!db.AtEnd(q)) {
+        for (int i = 0; i < 6; ++i) c.a[i] = db.GetInt(q, "C" + std::to_string(i));
+        c.a_ok = true;
+      }
+      db.Close(q);
+    }
+  }
+  if (!g.ok()) { g_faulted = true; return; }
+  {
+    const uint32_t q = db.Open(
+        "SELECT CAST(COALESCE(f.Size,0)*1000/MAX(COALESCE(ca.Size,0),0.0001) AS INTEGER) AS C0, "
+        "CAST(COALESCE(f.LowBias,0)*1000 AS INTEGER) AS C1, CAST(COALESCE(f.MidBias,0)*1000 AS INTEGER) AS C2, "
+        "CAST(COALESCE(f.HighBias,0)*1000 AS INTEGER) AS C3 FROM " + garage_tbl + " g "
+        "LEFT JOIN Evolution_PartTune f ON f.PartEnum=16 AND f.PartId=g.FuelSystem "
+        "LEFT JOIN Evolution_PartTune ca ON ca.PartEnum=12 AND ca.PartId=g.Camshaft WHERE g.Id=" + gid);
+    if (q) {
+      if (!db.AtEnd(q)) {
+        for (int i = 0; i < 4; ++i) c.b[i] = db.GetInt(q, "C" + std::to_string(i)) / 1000.0;
+        c.b_ok = true;
+      }
+      db.Close(q);
+    }
+  }
+  if (!g.ok()) { g_faulted = true; return; }
+  static bool logged_state = false;
+  if (!logged_state || c.a_ok != g_ptune.a_ok || c.b_ok != g_ptune.b_ok) {
+    logged_state = true;
+    REXLOG_INFO("Evolution part tuning: garage {} row {} (cooling {} dist {} races {} owners {} repairs {} redline {}); "
+                "Evolution_PartTune {} (size ratio {:.3f} bias {:.3f}/{:.3f}/{:.3f})", garage, c.a_ok ? "read" : "NOT READ",
+                c.a[0], c.a[1], c.a[2], c.a[3], c.a[4], c.a[5], c.b_ok ? "read" : "NOT READ", c.b[0], c.b[1], c.b[2], c.b[3]);
+  }
+  std::lock_guard<std::mutex> lock(g_ptune_mu);
+  g_ptune = c;
+}
+
 }  // namespace
+
+bool EvoUnlockEnabled() { return REXCVAR_GET(fm4_evo_unlock); }  // mods_menu.cpp: Evolution decade unlock switch
+void EvoUnlockSetEnabled(bool on) { REXCVAR_SET(fm4_evo_unlock, on); }
+// garage_menu.cpp: start year of the newest decade whose Event List column is open (1960 until the first tick).
+int EvoNewestUnlockedDecadeYear() {
+  std::lock_guard<std::mutex> lock(g_evo_mu);
+  int newest = 0;
+  if (g_evo.have)
+    for (int d = 0; d < kEvoDecades; ++d)
+      if (g_evo.lock_level[d] == 0) newest = d;
+  return 1960 + 10 * newest;
+}
+// Part tuning (part_tune.cpp) row reader, called from the physics hook. Answers from the cache PartTunePump fills; the
+// SQL text only selects which cached query is meant. Returns rows read (0 or 1) or -1 when there is no usable cache.
+int PartTuneQueryCached(const char* sql, double* out, int max_rows, int max_cols) {
+  if (!sql || !out || max_rows < 1) return -1;
+  std::lock_guard<std::mutex> lock(g_ptune_mu);
+  if (std::strstr(sql, "RedlineRPM")) {
+    if (!g_ptune.a_ok || max_cols < 6) return -1;
+    for (int i = 0; i < 6; ++i) out[i] = g_ptune.a[i];
+    return 1;
+  }
+  if (std::strstr(sql, "Evolution_PartTune")) {
+    if (!g_ptune.b_ok || max_cols < 4) return -1;
+    for (int i = 0; i < 4; ++i) out[i] = g_ptune.b[i];
+    return 1;
+  }
+  return -1;
+}
+bool EvoContractEnabled() { return REXCVAR_GET(fm4_evo_contract); }  // mods_menu.cpp: contract-out switch
+void EvoContractSetEnabled(bool on) { REXCVAR_SET(fm4_evo_contract, on); }
+// mods_menu.cpp / event list: ask to skip decade d (0 = the 1960s ... 5 = the 2010s). Takes effect on the next tick (a few
+// seconds); EvoContractLastResult() then reports 1 signed / 2 refused. Refused when disabled, already skipped, or in debt.
+void EvoContractOut(int decade) { if (REXCVAR_GET(fm4_evo_contract)) { g_evo_contract_result = 0; g_evo_contract_req = decade; } }
+int EvoContractLastResult() { return g_evo_contract_result.load(); }
+int EvoContractOwed() { std::lock_guard<std::mutex> lock(g_evo_mu); return g_evo.owed; }
+// Payout hook: call with the prize money about to be paid; returns the part to withhold (50%, capped at what is owed)
+// and queues the ledger update. Call on the game thread; returns 0 when disabled or nothing is owed.
+int EvoContractDeduct(int payout) {
+  if (payout <= 0 || !REXCVAR_GET(fm4_evo_contract)) return 0;
+  int cut = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_evo_mu);
+    cut = std::min(g_evo.owed, payout / 2);
+    if (cut <= 0) return 0;
+    g_evo.owed -= cut;
+  }
+  EvoDbQueue(("UPDATE {P}Evolution_Contract SET Owed=MAX(0,Owed-" + std::to_string(cut) + ") WHERE Owed>0").c_str());
+  return cut;
+}
+bool EvoHudVisible() { return REXCVAR_GET(fm4_evo_hud); }  // mods_menu.cpp: Evolution HUD switch
+void EvoHudSetVisible(bool on) { REXCVAR_SET(fm4_evo_hud, on); }
+
+// Evolution database API (declared in hooks.cpp). Thread-safe; jobs wait until a profile is loaded.
+// {P} in the sql becomes the profile table prefix. EvoDbRead copies sql and column names, returns the first row
+// only (int32 by column name) through cb on the game thread: cb(values, ncols), or cb(nullptr, 0) for no row.
+void EvoDbQueue(const char* sql) {
+  if (!sql || !*sql) return;
+  EvoDbJob job;
+  job.sql = sql;
+  EvoDbPush(std::move(job));
+}
+void EvoDbRead(const char* sql, const char* const* cols, int count, void (*cb)(const int32_t*, int)) {
+  if (!sql || !*sql || !cols || count <= 0) return;
+  EvoDbJob job;
+  job.sql = sql;
+  job.read = true;
+  job.cb = cb;
+  for (int i = 0; i < count; ++i) job.cols.emplace_back(cols[i] ? cols[i] : "");
+  EvoDbPush(std::move(job));
+}
+bool EvoProfileReady() { return g_evodb_ready.load(); }
+uint32_t EvoProfileGeneration() { return g_evodb_gen.load(); }
+
+// Per-frame callback: runs on the game thread once per frame (at most 8, duplicates ignored). Never unregistered.
+void EvoOnFrame(void (*cb)()) {
+  if (!cb) return;
+  std::lock_guard<std::mutex> lock(g_evo_frame_mu);
+  for (int i = 0; i < g_evo_frame_cb_n; ++i)
+    if (g_evo_frame_cbs[i] == cb) return;
+  if (g_evo_frame_cb_n < kEvoFrameCbMax) g_evo_frame_cbs[g_evo_frame_cb_n++] = cb;
+}
+// Goes up on every recorded race result. place 1..16 = the event is complete, 17 = races still pending.
+uint32_t EvoResultSerial() { return g_evo_result_serial.load(); }
+void EvoLastResult(uint32_t* event_id, int* place) {
+  if (event_id) *event_id = g_evo_result_event.load();
+  if (place) *place = g_evo_result_place.load();
+}
 
 // 0x824F4344, Event List selection-changed handler: r3 = highlighted EventId.
 // 0x82631D6C, inside RefreshHeader (0x82631D60): r3 = header widget.
@@ -536,6 +1234,15 @@ void DevKeysEventHighlighted(PPCRegister& r3) {
 
 // 0x822F787C, main game loop, once per frame.
 void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
+  static const bool shop_filter_init = (ShopFilterInit(), true);
+  (void)shop_filter_init;
+  static const bool part_tune_query_set = (PartTuneSetQuery(PartTuneQueryCached), true);
+  (void)part_tune_query_set;
+  EvoPoll(r1, r13, fpscr);
+  EvoDbPump(r1, r13, fpscr);
+  PartTunePump(r1, r13, fpscr);
+  EvoRunFrameCallbacks();
+  EvoIntroPoll(r1, r13, fpscr);
   if (!DevKeysEnabled()) return;
   static bool announced = false;
   if (!announced) {
@@ -602,4 +1309,63 @@ void DevKeysFrame(PPCRegister& r1, PPCRegister& r13, PPCFPSCRRegister& fpscr) {
     REXLOG_INFO("Dev keys: F10 reset event {} {}", event_id, ok ? "done" : "FAILED");
     Beep(ok);
   }
+}
+
+// Evolution fork: a race result was just recorded (called from the existing prize-car hooks 0x8248CA30 / 0x8248CAB0, so
+// no new hook entry). The post-race XP and result rows settle a little later, so DevKeysFrame runs EvoTick 2, 6 and 15 s
+// after the last result (T3: the XP of a race is the difference between the settled values of consecutive races, in the
+// "Evolution T3" lines of fm4.log). FM4_EVO=0 switches all Evolution tracking off.
+void EvoNoteRaceResult(uint32_t event_id, int place) {
+  {
+    std::lock_guard<std::mutex> lock(g_evo_mu);
+    g_evo.last_event = event_id;
+    g_evo.last_place = place;
+  }
+  g_evo_xp_note_ms = EvoNowMs();
+  g_evo_xp_polls_done = 0;
+  g_evo_result_event = event_id;
+  g_evo_result_place = place;
+  ++g_evo_result_serial;
+}
+
+// 0x824EDE00, CCareerEventSelect (Event List) vfunc slot 5, runs each time the screen is entered: queue the intro
+// check for the next frame (EvoIntroPoll).
+void EvoIntroEventListEnter(PPCRegister& r3) {
+  (void)r3;
+  if (!EvoEnabled() || (!g_intro_user_on.load() && !g_intro_force_once.load())) return;
+  int idle = kIntroIdle;
+  g_intro_state.compare_exchange_strong(idle, kIntroCheck);
+}
+
+// 0x824FBED8, CCareerEventSelect input handler entry. True = skip it (input swallowed) while the intro is open.
+bool EvoIntroInput(PPCRegister& r3) {
+  const int state = g_intro_state.load();
+  if (state != kIntroShowing && state != kIntroDismissed && EvoNowMs() >= g_intro_block_until_ms.load()) return false;
+  r3.u64 = 1;  // reported as handled
+  return true;
+}
+
+// Features-tab controls (mods_menu.cpp). Live: read on the next Event List open.
+bool EvoIntroUserEnabled() { return g_intro_user_on.load(); }
+void EvoIntroSetUserEnabled(bool on) {
+  g_intro_user_on = on;
+  REXLOG_INFO("Evolution intro: switched {}", on ? "on" : "off");
+}
+void EvoIntroShowAgain() {
+  g_intro_force_once = true;
+  REXLOG_INFO("Evolution intro: will show again on the next Event List open");
+}
+bool EvoIntroShowAgainPending() { return g_intro_force_once.load(); }
+
+// Created whenever Evolution is on, so the Features switch can turn the intro on even after FM4_EVO_INTRO=0.
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEvolutionIntro(rex::ui::ImGuiDrawer* drawer) {
+  if (!drawer || !EvoEnabled()) return nullptr;
+  return std::make_unique<EvolutionIntro>(drawer);
+}
+
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEvolutionHud(rex::ui::ImGuiDrawer* drawer) {
+  const char* v = std::getenv("FM4_EVO_HUD");
+  if (!drawer || !EvoEnabled()) return nullptr;
+  if (v && v[0] == '0') REXCVAR_SET(fm4_evo_hud, false);
+  return std::make_unique<EvolutionHud>(drawer);
 }

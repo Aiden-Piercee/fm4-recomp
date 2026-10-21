@@ -156,7 +156,16 @@ DiscoverSourceDirectories(const std::filesystem::path &app_root,
 
 } // namespace
 
+// Engine builder overlay, Insert (engine_build/builder_ui.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEngineBuilder(rex::ui::ImGuiDrawer* drawer,
+                                                          const std::filesystem::path& user_root);
+
 void Fm4App::OnPostSetup() {
+  // OnCreateDialogs runs in SetupPresentation, before ConstructRuntime, so runtime() is null there. The engine
+  // builder needs the user data root, so it is created here once the runtime exists.
+  if (dialog_drawer_ && runtime() && !engine_builder_)
+    engine_builder_ = CreateEngineBuilder(dialog_drawer_, runtime()->user_data_root());
+
   if ((!REXCVAR_GET(fm4_auto_install_disc2_content) &&
        !REXCVAR_GET(fm4_auto_install_dlc_content)) ||
       !runtime() ||
@@ -286,6 +295,12 @@ std::unique_ptr<rex::ui::ImGuiDialog> CreateOverheatHud(rex::ui::ImGuiDrawer* dr
 std::unique_ptr<rex::ui::ImGuiDialog> CreateModsOverlay(
     rex::ui::ImGuiDrawer* drawer, const std::filesystem::path& user_root);
 
+// Evolution progress readout, top left (dev_keys.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEvolutionHud(rex::ui::ImGuiDrawer* drawer);
+
+// Evolution intro popup, once per profile on the first Event List open (dev_keys.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEvolutionIntro(rex::ui::ImGuiDrawer* drawer);
+
 // Rear rim readout in the upgrade shop (staggered_wheels.cpp).
 std::unique_ptr<rex::ui::ImGuiDialog> CreateStaggerHud(rex::ui::ImGuiDrawer* drawer);
 
@@ -294,8 +309,12 @@ std::unique_ptr<rex::ui::ImGuiDialog> CreateRimPicker(rex::ui::ImGuiDrawer* draw
                                                       const std::filesystem::path& user_root);
 
 void Fm4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
+  dialog_drawer_ = drawer;
   stagger_hud_ = CreateStaggerHud(drawer);
   if (runtime()) rim_picker_ = CreateRimPicker(drawer, runtime()->user_data_root());
   overheat_hud_ = CreateOverheatHud(drawer);
+  evo_hud_ = CreateEvolutionHud(drawer);
+  evo_intro_ = CreateEvolutionIntro(drawer);
   if (runtime()) mods_overlay_ = CreateModsOverlay(drawer, runtime()->user_data_root());
+  // engine_builder_ is created in OnPostSetup (needs runtime()).
 }

@@ -28,16 +28,24 @@ public:
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
-  void OnShutdown() override { overheat_hud_.reset(); mods_overlay_.reset(); stagger_hud_.reset(); rim_picker_.reset(); }  // before the ImGui drawer goes
+  void OnShutdown() override { overheat_hud_.reset(); evo_hud_.reset(); evo_intro_.reset(); mods_overlay_.reset(); stagger_hud_.reset(); rim_picker_.reset(); engine_builder_.reset(); }  // before the ImGui drawer goes
   // void OnConfigurePaths(rex::PathConfig& paths) override {}
 
 private:
   // Engine temperature / oil pressure readout (overheat.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> overheat_hud_;
+  // Evolution progress readout (dev_keys.cpp).
+  std::unique_ptr<rex::ui::ImGuiDialog> evo_hud_;
+  // Evolution intro popup (dev_keys.cpp).
+  std::unique_ptr<rex::ui::ImGuiDialog> evo_intro_;
   // OPTIONS & MODS main-menu overlay (mods_menu.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> mods_overlay_;
   // Rear rim readout in the upgrade shop (staggered_wheels.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> stagger_hud_;
   // Rim Style picker in the upgrade shop (rim_picker.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> rim_picker_;
+  // Engine builder overlay, Insert (engine_build/builder_ui.cpp).
+  std::unique_ptr<rex::ui::ImGuiDialog> engine_builder_;
+  // Drawer from OnCreateDialogs, for dialogs created once the runtime exists (OnPostSetup).
+  rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
 };

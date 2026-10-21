@@ -22,6 +22,8 @@ Set-Content -LiteralPath (Join-Path $stage 'fm4.toml') -Value $config -Encoding 
 Copy-Item -LiteralPath (Join-Path $root 'Launch FM4 Player.bat') -Destination (Join-Path $stage 'Launch FM4.bat')
 Copy-Item -LiteralPath (Join-Path $root 'docs/PLAYING.md') -Destination (Join-Path $stage 'README.md')
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE'),(Join-Path $root 'THIRD_PARTY_NOTICES.md') -Destination $stage
+# Engine builder parts catalogue (docs/ENGINE_BUILDER.md); fm4.exe looks for it in its working directory.
+Copy-Item -LiteralPath (Join-Path $root 'assets/engine_builder/fm4_engine_parts.tsv') -Destination $stage
 New-Item -ItemType Directory -Path (Join-Path $stage 'game'),(Join-Path $stage 'disc2-content') | Out-Null
 # Use the compiler installation's redistributable DLLs, never arbitrary System32 copies.
 $vswhere="${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
