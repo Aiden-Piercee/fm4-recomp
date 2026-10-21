@@ -46,4 +46,6 @@ private:
   std::unique_ptr<rex::ui::ImGuiDialog> rim_picker_;
   // Engine builder overlay, Insert (engine_build/builder_ui.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> engine_builder_;
+  // Drawer from OnCreateDialogs, for dialogs created once the runtime exists (OnPostSetup).
+  rex::ui::ImGuiDrawer* dialog_drawer_ = nullptr;
 };
