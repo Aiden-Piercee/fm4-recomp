@@ -19,7 +19,7 @@ This feature was inspired by how Motor City Online (EA, 2001) built engines from
 | Engine model | `fm4/src/engine_build/dyno.cpp` | geometry + parts -> torque curve, valve float, safe rpm |
 | Catalogue | `fm4/src/engine_build/catalogue.cpp`, `assets/engine_builder/fm4_engine_parts.tsv` | stock geometry per FM4 `EngineID`, the parts, which engine families each part fits |
 | Builder state | `fm4/src/engine_build/engine_builder.cpp` | the player car's engine and fitted parts, saved per garage car in `{P}Evolution_EngineBuild`; the torque ratio and rev limit the physics hook asks for |
-| Overlay | `fm4/src/engine_build/builder_ui.cpp` | F7: slot list, part list, live dyno graph of the build against stock |
+| Overlay | `fm4/src/engine_build/builder_ui.cpp` | Insert (keybind `bind_engine_builder`, rebindable under Input/Keybinds in the F4 settings): slot list, part list, live dyno graph of the build against stock |
 | Physics | `part_tune.cpp` / `overheat.cpp` | `PartTuneTorqueMult` multiplies in `EngineBuilderTorqueRatio`; `OverheatEngineStep` raises the rev limiter to the build's safe rpm |
 
 ### Torque
@@ -86,4 +86,4 @@ Keys: `bore stroke cyl rod cr rmass rodrpm vpc ivd evd port portcc idur edur ili
 
 * Host: `tools/engine_build/dyno_test.cpp` (any C++17 compiler: `c++ -std=c++17 -O2 -I fm4/src/engine_build tools/engine_build/dyno_test.cpp fm4/src/engine_build/dyno.cpp fm4/src/engine_build/catalogue.cpp -o dyno_test`). Checks smoothness, the direction of each part's effect and catalogue parsing.
 * Calibration against FM4: `python tools/engine_build/export_curves.py <gamedb.slt> assets/engine_builder/fm4_engine_parts.tsv curves.csv` writes the stock FM4 curves of the catalogue's engines from the user's own game database (keep it out of the repo), then `dyno_calibrate assets/engine_builder/fm4_engine_parts.tsv curves.csv` (built from `tools/engine_build/dyno_calibrate.cpp` like the test) prints model against FM4 peak rpm and curve-shape error per engine.
-* In game: pick a pilot car (1969 Camaro Z28, 1970 Chevelle SS, 1969 Charger R/T), F7, fit a big cam and single-plane intake, take it to Test Drive. `fm4.log` lines start with `Engine builder:`.
+* In game: pick a pilot car (1969 Camaro Z28, 1970 Chevelle SS, 1969 Charger R/T), press Insert, fit a big cam and single-plane intake, take it to Test Drive. `fm4.log` lines start with `Engine builder:`.

@@ -37,7 +37,7 @@
 #include <vector>
 
 REXCVAR_DEFINE_BOOL(fm4_engine_builder, true, "Forza Motorsport 4/Evolution",
-                    "Engine builder: parts-based engines (F7 overlay). Off = every car drives as stock FM4");
+                    "Engine builder: parts-based engines (Insert overlay). Off = every car drives as stock FM4");
 REXCVAR_DEFINE_BOOL(fm4_engine_builder_career, false, "Forza Motorsport 4/Evolution",
                     "Engine builder: also apply builds in career events (PI and class do not account for builds yet)");
 

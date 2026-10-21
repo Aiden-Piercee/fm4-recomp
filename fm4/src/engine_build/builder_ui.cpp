@@ -1,30 +1,22 @@
 // ---------------------------------------------------------------------------
-// Engine builder overlay (Forza-4-Evolution). F7 opens and closes it. Design: docs/ENGINE_BUILDER.md.
+// Engine builder overlay (Forza-4-Evolution). Insert opens and closes it (keybind bind_engine_builder, rebindable in
+// the F4 settings overlay; F7 is the runtime's achievements key). Design: docs/ENGINE_BUILDER.md.
 //
 // Left: the ten slots with the fitted part. Middle: the parts for the selected slot that fit this engine's family and
 // are on sale in the newest unlocked Evolution decade. Right: a dyno graph of torque and power, stock (grey), the
 // current build (orange) and the highlighted part (blue), with peak numbers, the safe rev limit and warnings.
 // Mouse and keyboard only in the MVP; the game still sees pad input while it is open. Parts are free for now.
 // ---------------------------------------------------------------------------
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#pragma comment(lib, "user32.lib")
-#endif
-
 #include "engine_builder.h"
 
 #include <imgui.h>
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
+#include <rex/ui/keybinds.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -39,28 +31,6 @@ using namespace eb;
 
 constexpr float kKwToHp = 1.341022f;
 
-[[maybe_unused]] bool GameHasFocus() {
-#ifdef _WIN32
-  DWORD pid = 0;
-  GetWindowThreadProcessId(GetForegroundWindow(), &pid);
-  return pid == GetCurrentProcessId();
-#else
-  return true;
-#endif
-}
-
-bool F7Pressed() {
-#ifdef _WIN32
-  static bool was_down = false;
-  const bool down = (GetAsyncKeyState(VK_F7) & 0x8000) != 0 && GameHasFocus();
-  const bool pressed = down && !was_down;
-  was_down = down;
-  return pressed;
-#else
-  return false;
-#endif
-}
-
 std::string PartLabel(const Part* p) {
   if (!p) return "Stock";
   return p->brand + " " + p->name;
@@ -68,11 +38,15 @@ std::string PartLabel(const Part* p) {
 
 class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
  public:
-  explicit EngineBuilderOverlay(rex::ui::ImGuiDrawer* drawer) : rex::ui::ImGuiDialog(drawer) {}
+  explicit EngineBuilderOverlay(rex::ui::ImGuiDrawer* drawer) : rex::ui::ImGuiDialog(drawer) {
+    rex::ui::RegisterBind(kBindName, "Insert", "Toggle engine builder overlay",
+                          [this] { toggle_requested_.store(true, std::memory_order_relaxed); });
+  }
+  ~EngineBuilderOverlay() override { rex::ui::UnregisterBind(kBindName); }
 
  protected:
   void OnDraw(ImGuiIO& io) override {
-    if (F7Pressed()) {
+    if (toggle_requested_.exchange(false, std::memory_order_relaxed)) {
       open_ = !open_;
       REXLOG_INFO("Engine builder: overlay {}", open_ ? "opened" : "closed");
     }
@@ -96,6 +70,9 @@ class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
   }
 
  private:
+  static constexpr const char* kBindName = "bind_engine_builder";
+  std::atomic<bool> toggle_requested_{false};
+
   void DrawBody(const ImVec2& size) {
     const Catalogue* cat = GetCatalogue();
     if (!cat) {
@@ -285,7 +262,7 @@ class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
     std::snprintf(ax, sizeof ax, "%.0f hp", p_hi);
     dl->AddText(ImVec2(b.x + 2.0f, a.y), IM_COL32(170, 170, 170, 255), ax);
     ImGui::Dummy(ImVec2(gw, gh));
-    ImGui::TextDisabled("thick = torque, thin = power. Double-click a part to fit it. F7 or Esc closes.");
+    ImGui::TextDisabled("thick = torque, thin = power. Double-click a part to fit it. Insert or Esc closes.");
   }
 
   bool open_ = false;

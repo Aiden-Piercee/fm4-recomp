@@ -299,7 +299,7 @@ std::unique_ptr<rex::ui::ImGuiDialog> CreateStaggerHud(rex::ui::ImGuiDrawer* dra
 std::unique_ptr<rex::ui::ImGuiDialog> CreateRimPicker(rex::ui::ImGuiDrawer* drawer,
                                                       const std::filesystem::path& user_root);
 
-// Engine builder overlay, F7 (engine_build/builder_ui.cpp).
+// Engine builder overlay, Insert (engine_build/builder_ui.cpp).
 std::unique_ptr<rex::ui::ImGuiDialog> CreateEngineBuilder(rex::ui::ImGuiDrawer* drawer,
                                                           const std::filesystem::path& user_root);
 

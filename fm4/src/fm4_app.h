@@ -44,6 +44,6 @@ private:
   std::unique_ptr<rex::ui::ImGuiDialog> stagger_hud_;
   // Rim Style picker in the upgrade shop (rim_picker.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> rim_picker_;
-  // Engine builder overlay, F7 (engine_build/builder_ui.cpp).
+  // Engine builder overlay, Insert (engine_build/builder_ui.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> engine_builder_;
 };
