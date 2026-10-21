@@ -71,6 +71,8 @@ struct EngineSpec {
   // Ignition and fuel
   int ignition = kPoints;
   double fuel_octane = 98.0;  // research octane of the fuel the engine is tuned for (period premium leaded ~ 100)
+  double spark_tune = 1.0;    // spark and mixture calibration: 1 = best power; ~0.85 = retarded, lean, EGR smog-era
+                              // tune (1975-80). A recurve / performance ignition or carb part sets it back to 1.
 };
 
 // Result: torque along evenly spaced rpm points from 0 to rpm_max, plus summary numbers.

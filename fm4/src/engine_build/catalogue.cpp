@@ -204,6 +204,7 @@ void ApplyMods(EngineSpec& s, const std::vector<Mod>& mods, int* unknown) {
     else if (k == "muffler") Apply(s.muffler_restriction, m);
     else if (k == "ign") Apply(s.ignition, m);
     else if (k == "octane") Apply(s.fuel_octane, m);
+    else if (k == "tune") Apply(s.spark_tune, m);
     else if (unknown) ++*unknown;
   }
 }

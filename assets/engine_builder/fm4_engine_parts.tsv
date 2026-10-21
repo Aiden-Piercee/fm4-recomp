@@ -98,9 +98,9 @@ E	780	FORD_385	Ford 429 Super Cobra Jet V8 (Mustang Mach 1)	bore=110.74	stroke=9
 E	453	PONTIAC_V8	Pontiac 455 Super Duty V8 (Trans Am)	bore=105.41	stroke=106.93	cyl=8	rod=168.3	cr=8.4	rmass=47	rodrpm=5600	vpc=2	ivd=53.6	evd=45	port=1.1	idur=214	edur=226	ilift=10.34	elift=10.49	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=800	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.55	ign=0	octane=95
 E	738	FORD_CLEVELAND	Ford 351 Cleveland 4V V8 (XB Falcon GT)	bore=101.6	stroke=88.9	cyl=8	rod=146.8	cr=9.1	rmass=32	rodrpm=6200	vpc=2	ivd=55.6	evd=43.4	port=1.05	idur=202	edur=214	ilift=9.4	elift=9.78	lsa=116	lifter=0	rocker=1.73	intake=0	cfm=600	carb=1	filter=0.06	header=1	pipe=57.1	duals=1	muffler=0.55	ign=0	octane=97
 # 736: FM4 6600 cc; the 1977 T/A 6.6 was the Pontiac 400 W72 (the Olds 403 6.6 is the alternative)
-E	736	PONTIAC_V8	Pontiac 400 V8 (T/A 6.6, W72)	bore=104.65	stroke=95.25	cyl=8	rod=168.3	cr=8.2	rmass=42	rodrpm=5400	vpc=2	ivd=53.6	evd=45	port=0.95	idur=200	edur=210	ilift=10.52	elift=10.49	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=800	carb=1	filter=0.08	header=0	pipe=63.5	duals=0	muffler=0.65	ign=1	octane=91
-E	513	FORD_WINDSOR	Ford 302 V8 (2-barrel, King Cobra)	bore=101.6	stroke=76.2	cyl=8	rod=129.3	cr=8.4	rmass=27	rodrpm=5500	vpc=2	ivd=45.2	evd=36.8	port=0.85	idur=188	edur=196	ilift=9.1	elift=9.45	lsa=114	lifter=0	rocker=1.6	intake=0	cfm=350	carb=1	filter=0.08	header=0	pipe=57.1	duals=0	muffler=0.7	ign=1	octane=91
-E	511	CHEVY_SB	Chevrolet 350 V8 (LM1, Camaro Z28)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=8.2	rmass=31	rodrpm=5500	vpc=2	ivd=49.3	evd=38.1	port=0.9	idur=194	edur=202	ilift=9.91	elift=10.41	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=750	carb=1	filter=0.07	header=0	pipe=57.1	duals=0	muffler=0.65	ign=1	octane=91
+E	736	PONTIAC_V8	Pontiac 400 V8 (T/A 6.6, W72)	bore=104.65	stroke=95.25	cyl=8	rod=168.3	cr=8.2	rmass=42	rodrpm=5400	vpc=2	ivd=53.6	evd=45	port=0.95	idur=200	edur=210	ilift=10.52	elift=10.49	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=800	carb=1	filter=0.08	header=0	pipe=63.5	duals=0	muffler=0.65	ign=1	octane=91	tune=0.85
+E	513	FORD_WINDSOR	Ford 302 V8 (2-barrel, King Cobra)	bore=101.6	stroke=76.2	cyl=8	rod=129.3	cr=8.4	rmass=27	rodrpm=5500	vpc=2	ivd=45.2	evd=36.8	port=0.85	idur=188	edur=196	ilift=9.1	elift=9.45	lsa=114	lifter=0	rocker=1.6	intake=0	cfm=350	carb=1	filter=0.08	header=0	pipe=57.1	duals=0	muffler=0.7	ign=1	octane=91	tune=0.85
+E	511	CHEVY_SB	Chevrolet 350 V8 (LM1, Camaro Z28)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=8.2	rmass=31	rodrpm=5500	vpc=2	ivd=49.3	evd=38.1	port=0.9	idur=194	edur=202	ilift=9.91	elift=10.41	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=750	carb=1	filter=0.07	header=0	pipe=57.1	duals=0	muffler=0.65	ign=1	octane=91	tune=0.85
 # 489: EFI: cfm is the throttle body + runner airflow rating
 E	489	CHEVY_SB	Chevrolet 350 TPI V8 (L98, Trans Am GTA)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=9.3	rmass=31	rodrpm=5800	vpc=2	ivd=49.3	evd=38.1	port=0.95	idur=202	edur=206	ilift=10.24	elift=10.54	lsa=115	lifter=2	rocker=1.5	intake=3	cfm=650	carb=0	filter=0.05	header=1	pipe=57.1	duals=0	muffler=0.55	ign=1	octane=95
 E	477	CHEVY_SB	Chevrolet 350 TPI V8 (L98, Camaro IROC-Z)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=9.3	rmass=31	rodrpm=5800	vpc=2	ivd=49.3	evd=38.1	port=0.95	idur=202	edur=206	ilift=10.24	elift=10.54	lsa=115	lifter=2	rocker=1.5	intake=3	cfm=650	carb=0	filter=0.05	header=1	pipe=57.1	duals=0	muffler=0.55	ign=1	octane=95
@@ -541,9 +541,10 @@ P	190009	exhaust	*	Coastline Exhaust	Dual 3 in straight-through, H-pipe	1985	620
 P	190010	exhaust	*	Coastline Exhaust	Stainless dual 2-1/2 in, X-pipe	1990	780	-5	pipe=63.5	duals=1	muffler=0.32
 # ---- ignition
 P	200001	ignition	*	Factory	Points distributor, tune-up kit	1955	60	0	ign=0
-P	200002	ignition	*	Pulsar Ignition	Race magneto	1955	650	0	ign=2
+P	200002	ignition	*	Pulsar Ignition	Race magneto	1955	650	0	ign=2	tune=1
 P	200003	ignition	*	Factory	transistorized ignition	1964	320	0	ign=1
-P	200004	ignition	*	Pulsar Ignition	Capacitive discharge ignition box	1970	380	0	ign=2
-P	200005	ignition	*	Pulsar Ignition	Magnetic-trigger electronic conversion	1972	240	0	ign=1
+P	200004	ignition	*	Pulsar Ignition	Capacitive discharge ignition box	1970	380	0	ign=2	tune=1
+P	200005	ignition	*	Pulsar Ignition	Magnetic-trigger electronic conversion	1972	240	0	ign=1	tune=1
 P	200006	ignition	*	Factory	large-cap electronic distributor	1974	220	0	ign=1
-P	200007	ignition	*	Pulsar Ignition	Multi-spark CD ignition + high-output coil	1984	460	0	ign=2
+P	200007	ignition	*	Pulsar Ignition	Multi-spark CD ignition + high-output coil	1984	460	0	ign=2	tune=1
+P	200008	ignition	*	Pulsar Ignition	Distributor recurve kit (performance advance curve)	1960	90	0	tune=1

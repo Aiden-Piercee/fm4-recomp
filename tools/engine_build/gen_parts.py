@@ -46,7 +46,7 @@ FAMD = {f[0]: f for f in FAM}
 # ---------------------------------------------------------------------------------------------- engines
 # Each: EngineID, family, name, dict of real-world figures. Lengths in inches here, converted to mm below.
 def eng(eid, fam, name, bore, stroke, rod, cr, rmass, rodrpm, ivd, evd, port, idur, edur, il, el, lsa, lifter,
-        rocker, intake, cfm, carb, filt, header, pipe_in, duals, muff, ign, octane, pdia=0, plen=0, note=""):
+        rocker, intake, cfm, carb, filt, header, pipe_in, duals, muff, ign, octane, pdia=0, plen=0, tune=0, note=""):
     d = dict(bore=round(bore*IN, 2), stroke=round(stroke*IN, 2), cyl=8, rod=round(rod*IN, 1), cr=cr, rmass=rmass,
              rodrpm=rodrpm, vpc=2, ivd=round(ivd*IN, 1), evd=round(evd*IN, 1), port=port, idur=idur, edur=edur,
              ilift=nl(il, rocker), elift=nl(el, rocker), lsa=lsa, lifter=lifter, rocker=rocker, intake=intake,
@@ -54,6 +54,7 @@ def eng(eid, fam, name, bore, stroke, rod, cr, rmass, rodrpm, ivd, evd, port, id
     if pdia: d["pdia"] = pdia
     if plen: d["plen"] = plen
     d.update(pipe=round(pipe_in*IN, 1), duals=duals, muffler=muff, ign=ign, octane=octane)
+    if tune: d["tune"] = tune  # smog-era spark and mixture calibration (1.0 = performance tune)
     return (eid, fam, name, d, note)
 
 E = [
@@ -118,12 +119,12 @@ E = [
  eng(738, "FORD_CLEVELAND", "Ford 351 Cleveland 4V V8 (XB Falcon GT)", 4.00, 3.50, 5.78, 9.1, 32, 6200,
      2.19, 1.71, 1.05, 202, 214, .427, .444, 116, 0, 1.73, 0, 600, 1, 0.06, 1, 2.25, 1, 0.55, 0, 97),
  eng(736, "PONTIAC_V8", "Pontiac 400 V8 (T/A 6.6, W72)", 4.12, 3.75, 6.625, 8.2, 42, 5400,
-     2.11, 1.77, 0.95, 200, 210, .414, .413, 114, 0, 1.5, 0, 800, 1, 0.08, 0, 2.5, 0, 0.65, 1, 91,
+     2.11, 1.77, 0.95, 200, 210, .414, .413, 114, 0, 1.5, 0, 800, 1, 0.08, 0, 2.5, 0, 0.65, 1, 91, tune=0.85,
      note="FM4 6600 cc; the 1977 T/A 6.6 was the Pontiac 400 W72 (the Olds 403 6.6 is the alternative)"),
  eng(513, "FORD_WINDSOR", "Ford 302 V8 (2-barrel, King Cobra)", 4.00, 3.00, 5.09, 8.4, 27, 5500,
-     1.78, 1.45, 0.85, 188, 196, .382, .397, 114, 0, 1.6, 0, 350, 1, 0.08, 0, 2.25, 0, 0.7, 1, 91),
+     1.78, 1.45, 0.85, 188, 196, .382, .397, 114, 0, 1.6, 0, 350, 1, 0.08, 0, 2.25, 0, 0.7, 1, 91, tune=0.85),
  eng(511, "CHEVY_SB", "Chevrolet 350 V8 (LM1, Camaro Z28)", 4.00, 3.48, 5.70, 8.2, 31, 5500,
-     1.94, 1.50, 0.9, 194, 202, .390, .410, 114, 0, 1.5, 0, 750, 1, 0.07, 0, 2.25, 0, 0.65, 1, 91),
+     1.94, 1.50, 0.9, 194, 202, .390, .410, 114, 0, 1.5, 0, 750, 1, 0.07, 0, 2.25, 0, 0.65, 1, 91, tune=0.85),
  eng(489, "CHEVY_SB", "Chevrolet 350 TPI V8 (L98, Trans Am GTA)", 4.00, 3.48, 5.70, 9.3, 31, 5800,
      1.94, 1.50, 0.95, 202, 206, .403, .415, 115, 2, 1.5, 3, 650, 0, 0.05, 1, 2.25, 0, 0.55, 1, 95,
      note="EFI: cfm is the throttle body + runner airflow rating"),
@@ -539,7 +540,9 @@ for (b, n, y, pr, ign) in [
     (B_IGN, "Magnetic-trigger electronic conversion", 1972, 240, 1),
     (F, "Factory large-cap electronic distributor", 1974, 220, 1),
     (B_IGN, "Multi-spark CD ignition + high-output coil", 1984, 460, 2)]:
-    part("ignition", G, b, n, y, pr, 0, {"ign": ign})
+    # Aftermarket systems come with a performance advance curve: they undo a smog-era spark calibration (tune).
+    part("ignition", G, b, n, y, pr, 0, {"ign": ign, "tune": 1} if b != F else {"ign": ign})
+part("ignition", G, B_IGN, "Distributor recurve kit (performance advance curve)", 1960, 90, 0, {"tune": 1})
 
 # ---------------------------------------------------------------------------------------------- write
 HDR = """# Forza Motorsport 4 engine builder: parts catalogue (Forza-4-Evolution).

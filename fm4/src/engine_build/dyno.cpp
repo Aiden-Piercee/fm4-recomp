@@ -25,14 +25,14 @@
 //                     operating point is solved by bisection (monotone, exact, smooth in rpm);
 //     * header tune   a bell centred on the classic primary-length rule rpm = 850 x (180 + EVO) / (length_in + 3).
 //   Exhaust backpressure (manifold + pipe + muffler, each K x dynamic pressure of the hot gas) costs torque as
-//   exp(-0.32 x backpressure/atm). Combustion: Otto efficiency at gamma 1.3 scaled to real engines, a knock limit
-//   from compression (lowered by late intake closing) against fuel octane, a spark loss for points / electronic at
-//   high rpm. Friction: fmep rising with mean piston speed plus valve spring load. Valve float: a smooth Gaussian
-//   roll-off above the float rpm.
+//   exp(-0.25 x backpressure/atm). Combustion: Otto efficiency at gamma 1.3 scaled to real engines (times spark_tune
+//   for smog-era calibrations), a knock limit from compression (lowered by late intake closing) against fuel octane,
+//   a spark loss for points / electronic at high rpm. Friction: fmep rising with mean piston speed plus valve spring
+//   load. Valve float: a smooth Gaussian roll-off above the float rpm.
 //
 // Every non-smooth operation (max, step) is a softplus or logistic so the curve has no kinks; inputs are sanitised
-// first so a zero, a NaN or an out-of-range catalogue value can not produce NaN or inf. 96 points take a few
-// microseconds.
+// first so a zero, a NaN or an out-of-range catalogue value can not produce NaN or inf. 96 points take well
+// under a millisecond.
 // ---------------------------------------------------------------------------
 #include "dyno.h"
 
@@ -67,6 +67,8 @@ double Logistic(double x) {
 double Bell(double x) { return std::exp(-x * x); }
 // x^2 / (1 + x^2): 0 at 0, 0.5 at 1, -> 1.
 double Rise(double x) { return x * x / (1.0 + x * x); }
+// Sharper version for the cam's filling transition: x^3 / (1 + x^3).
+double Rise3(double x) { return x * x * x / (1.0 + x * x * x); }
 
 double Sane(double v, double lo, double hi, double fallback) {
   if (!std::isfinite(v)) return fallback;
@@ -85,7 +87,7 @@ struct IntakeStyle {
   double flow_k;       // fractional depression at the engine's 6000 rpm airflow
 };
 constexpr IntakeStyle kIntakes[5] = {
-    {440.0, 3500.0, 0.62, 0.050, 0.000, 2500.0, 0.050},  // dual plane: broad and low, restrictive at the top
+    {440.0, 3500.0, 0.62, 0.050, 0.000, 2500.0, 0.040},  // dual plane: broad and low, restrictive at the top
     {300.0, 5600.0, 0.50, 0.060, 0.035, 2800.0, 0.028},  // single plane
     {240.0, 7000.0, 0.38, 0.085, 0.090, 3600.0, 0.012},  // tunnel ram: highest, narrowest, soft low down
     {430.0, 3900.0, 0.55, 0.085, 0.000, 2500.0, 0.045},  // long-runner EFI: broad mid-range
@@ -110,7 +112,7 @@ constexpr HeaderStyle kHeaders[5] = {
 };
 
 // Valve float base by lifter at 11.4 mm valve lift and a 51 mm intake valve.
-constexpr double kFloatBase[4] = {5900.0, 6700.0, 7000.0, 8100.0};
+constexpr double kFloatBase[4] = {6300.0, 7000.0, 7300.0, 8400.0};
 // Valve spring load factor (friction) by lifter.
 constexpr double kSpringLoad[4] = {1.0, 1.35, 1.25, 1.75};
 // Cam/lifter contact friction relief for rollers, kPa.
@@ -193,15 +195,15 @@ Engine Prepare(const EngineSpec& in) {
   e.lift_in = ilift;
 
   // Time-area factor: the valve spends longer open with more duration (advertised ~ 0.050 in figure + 50).
-  const double tin = std::pow((idur + 50.0) / 272.0, 0.75);
-  const double tex = std::pow((edur + 50.0) / 280.0, 0.75);
+  const double tin = std::pow((idur + 50.0) / 272.0, 1.2);
+  const double tex = std::pow((edur + 50.0) / 280.0, 1.2);
   constexpr double kCd = 0.36;  // mean flow coefficient over the event, on curtain area
   const double a_in = vpc * kCd * port * std::pow(e.port_ratio, 0.2) * kPi * ivd * EffectiveLift(ilift, ivd) * tin;
   const double a_ex = vpc * kCd * kPi * evd * EffectiveLift(elift, evd) * tex;
   e.area_ratio_in = e.piston_area * 1e6 / a_in;
   e.area_ratio_ex = e.piston_area * 1e6 / a_ex;
-  // Charge velocity per rpm relative to a 350 small block on 2.02 valves (area ratio ~ 10.7, stroke 88.4).
-  e.charge_vel_ref = (e.area_ratio_in * stroke_mm / std::pow(e.port_ratio, 0.5)) / (10.7 * 88.4);
+  // Charge velocity per rpm relative to a 350 small block on 2.02 valves (area ratio ~ 7.3, stroke 88.4).
+  e.charge_vel_ref = (e.area_ratio_in * stroke_mm / std::pow(e.port_ratio, 0.5)) / (7.3 * 88.4);
 
   // Cam timing.
   const double lsa = Sane(in.lobe_separation, 100.0, 124.0, 112.0);
@@ -216,8 +218,8 @@ Engine Prepare(const EngineSpec& in) {
   e.overlap_pos = SoftPos(e.overlap + 12.0, 5.0);
   e.trap_low = CylVolume(e, 180.0 + e.ivc_adv) / CylVolume(e, 180.0);
   // A later closing needs more charge momentum, so the cam "comes in" higher; a faster charge brings it in lower.
-  e.cam_rpm = 58.0 * e.ivc_adv / std::pow(std::max(0.3, e.charge_vel_ref), 0.6);
-  e.ram = 0.07 * e.ivc_adv / 62.0;
+  e.cam_rpm = 68.0 * e.ivc_adv / std::pow(std::max(0.3, e.charge_vel_ref), 0.5);
+  e.ram = 0.11 * SoftPos(e.ivc_adv - 30.0, 5.0) / 32.0;
 
   // Induction.
   const int intake = SaneInt(in.intake, 0, 4, kDualPlane);
@@ -249,9 +251,10 @@ Engine Prepare(const EngineSpec& in) {
 
   // Combustion and knock. Requirement rises with compression and bore, falls with a late intake closing.
   const double otto = 1.0 - std::pow(e.cr, -0.3);
-  e.eta_i = 0.66 * otto;
+  e.eta_i = 0.70 * otto;
   const double octane_req = 64.0 + 3.2 * e.cr - 0.15 * (e.ivc_adv - 62.0) + 0.10 * (bore_mm - 101.6);
   e.knock_margin = Sane(in.fuel_octane, 70.0, 120.0, 98.0) - octane_req;
+  e.eta_i *= Sane(in.spark_tune, 0.5, 1.1, 1.0);
   e.ignition = SaneInt(in.ignition, 0, 2, kPoints);
   e.lifter = SaneInt(in.lifter, 0, 3, kHydraulicFlat);
   e.fmep_rod_mult = 1.0 + 0.15 * std::min(0.4, std::max(-0.4, 1.7 - e.rod / e.stroke));
@@ -273,7 +276,7 @@ double IntakeDepression(const Engine& e, double cfm) {
   double ref = e.demand_cfm_6000;
   if (e.carb_cfm > 0.0) {
     const double qc = cfm / e.carb_cfm;
-    dp += 0.05 * qc * qc * (1.0 + 0.35 * qc * qc);  // rated at 1.5 inHg; venturi steepens past its rating
+    dp += 0.05 * qc * qc * (1.0 + 0.8 * qc * qc);  // rated at 1.5 inHg; venturi steepens past its rating
     ref = e.carb_cfm;
   } else {
     dp += 0.025 * qd * qd;  // throttle body sized to the engine
@@ -289,13 +292,13 @@ double Torque(const Engine& e, double rpm) {
 
   // Cam filling: trapped fraction at intake closing, rising to full + ram above the cam rpm.
   const double xc = rpm / e.cam_rpm;
-  double ve = e.trap_low + (1.0 + e.ram - e.trap_low) * Rise(xc);
+  double ve = e.trap_low + (1.0 + e.ram - e.trap_low) * Rise3(xc);
 
   // Valve choking (Taylor's Mach index).
   const double z_in = e.area_ratio_in * sp / kSoundSpeed;
   const double z_ex = e.area_ratio_ex * sp / kSoundSpeed;
-  ve *= std::pow(1.0 + std::pow(z_in / 0.68, 4.0), -0.25);
-  ve *= std::pow(1.0 + std::pow(z_ex / 0.95, 4.0), -0.25);
+  ve *= std::pow(1.0 + std::pow(z_in / 0.45, 4.0), -0.25);
+  ve *= std::pow(1.0 + std::pow(z_ex / 0.75, 4.0), -0.25);
 
   // Big port: slow charge at low rpm.
   ve *= 1.0 - 0.10 * SoftPos(e.port_ratio - 1.0, 0.05) / (1.0 + (rpm / 3000.0) * (rpm / 3000.0));
@@ -317,7 +320,7 @@ double Torque(const Engine& e, double rpm) {
   ve *= 1.0 + 0.0012 * e.overlap_pos * (hs.scavenge - 0.35) * Rise(rpm / 4500.0);
 
   // Valve float: smooth, steep roll-off above the float rpm.
-  const double over = SoftPos(rpm - e.float_rpm, 150.0) / 1300.0;
+  const double over = SoftPos(rpm - e.float_rpm, 250.0) / 2300.0;
   ve *= Bell(over);
 
   // Restrictions: solve VE_actual = VE_open * exp(-depression(airflow(VE_actual))) by bisection.
@@ -342,11 +345,11 @@ double Torque(const Engine& e, double rpm) {
   const double v_pipe = side / kRhoExhaust / e.pipe_area;
   const double q_ref = 0.5 * kRhoExhaust * v_ref * v_ref, q_pipe = 0.5 * kRhoExhaust * v_pipe * v_pipe;
   const double back = (e.header_k * q_ref + (1.4 + 7.0 * e.muffler) * q_pipe) / kAtmPa;
-  double eff = e.eta_i * std::exp(-0.32 * back);
+  double eff = e.eta_i * std::exp(-0.25 * back);
 
   // Combustion: heat loss at low speed, spark energy at high rpm, knock.
-  const double xl = rpm / 1300.0;
-  eff *= 1.0 - 0.22 / (1.0 + xl * xl);
+  const double xl = rpm / 1500.0;
+  eff *= 1.0 - 0.30 / (1.0 + xl * xl);
   if (e.ignition == kPoints) eff *= 1.0 - 0.075 * Logistic((rpm - 6100.0) / 650.0);
   else if (e.ignition == kElectronic) eff *= 1.0 - 0.025 * Logistic((rpm - 8000.0) / 700.0);
   const double knock_weight = 1.15 - 0.3 * Rise(rpm / 4000.0);
@@ -356,7 +359,7 @@ double Torque(const Engine& e, double rpm) {
 
   // Friction (fmep, kPa): rubbing + pumping vs piston speed, valve springs.
   const double spring = (e.lift_in / 11.4) * kSpringLoad[e.lifter] * (8.0 + 0.6 * sp) - kRollerRelief[e.lifter] * (1.0 + sp / 20.0);
-  const double fmep = ((55.0 + 6.5 * sp + 0.32 * sp * sp) * e.fmep_rod_mult + spring) * 1e3;
+  const double fmep = ((50.0 + 5.5 * sp + 0.30 * sp * sp) * e.fmep_rod_mult + spring) * 1e3;
 
   const double t = (imep - fmep) * e.vd_total / (4.0 * kPi);
   return SoftPos(t, 2.0);

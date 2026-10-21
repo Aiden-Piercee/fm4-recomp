@@ -63,9 +63,11 @@ bool AllFinite(const eb::DynoResult& r) {
          std::isfinite(r.valve_float_rpm) && std::isfinite(r.idle_rpm) && std::isfinite(r.knock_margin);
 }
 
-double MaxJump(const eb::DynoResult& r) {
+// Largest point-to-point change as a fraction of peak torque, over points up to `upto` rpm (default: all).
+double MaxJump(const eb::DynoResult& r, double upto = 1e30) {
   double j = 0.0;
-  for (int i = 1; i < eb::DynoResult::kPoints; ++i) j = std::fmax(j, std::fabs(r.torque_nm[i] - r.torque_nm[i - 1]));
+  for (int i = 1; i < eb::DynoResult::kPoints && r.rpm_at(i - 1) <= upto; ++i)
+    j = std::fmax(j, std::fabs(r.torque_nm[i] - r.torque_nm[i - 1]));
   return r.peak_torque_nm > 0.0 ? j / r.peak_torque_nm : 0.0;
 }
 
@@ -134,6 +136,56 @@ int main(int argc, char** argv) {
       }
     Check(ok, "defaults / all-zero / out-of-range specs stay finite");
     Check(smooth, "and smooth (max step < 8% of peak)");
+  }
+
+  // --- Fuzz: random specs across the catalogue's ranges -------------------------------------------------------------
+  {
+    unsigned state = 12345u;
+    auto rnd = [&](double lo, double hi) {
+      state = state * 1664525u + 1013904223u;
+      return lo + (hi - lo) * ((state >> 8) & 0xFFFFFF) / double(0xFFFFFF);
+    };
+    int bad = 0, rough = 0, rough_all = 0;
+    double worst = 0.0, worst_all = 0.0;
+    for (int n = 0; n < 3000; ++n) {
+      EngineSpec s;
+      s.bore_mm = rnd(80, 115); s.stroke_mm = rnd(70, 110); s.cylinders = int(rnd(4, 12.99));
+      s.rod_length_mm = rnd(0, 1) < 0.5 ? 0.0 : s.stroke_mm * rnd(1.5, 2.0);
+      s.compression = rnd(7.5, 14); s.valves_per_cyl = rnd(0, 1) < 0.8 ? 2 : 4;
+      s.intake_valve_mm = rnd(40, 60) * (s.valves_per_cyl == 4 ? 0.7 : 1.0); s.exhaust_valve_mm = s.intake_valve_mm * rnd(0.75, 0.88);
+      s.port_flow = rnd(0.8, 1.35); s.port_volume_cc = rnd(0, 1) < 0.5 ? 0.0 : rnd(140, 330);
+      s.intake_duration = rnd(180, 290); s.exhaust_duration = s.intake_duration + rnd(-4, 16);
+      s.intake_lift_mm = rnd(8, 17); s.exhaust_lift_mm = s.intake_lift_mm * rnd(0.95, 1.08);
+      s.lobe_separation = rnd(104, 118); s.intake_centerline = rnd(0, 1) < 0.5 ? 0.0 : s.lobe_separation + rnd(-8, 4);
+      s.lifter = int(rnd(0, 3.99)); s.rocker_ratio = rnd(1.5, 1.8);
+      s.valve_float_rpm = rnd(0, 1) < 0.7 ? 0.0 : rnd(5000, 9500);
+      s.intake = int(rnd(0, 4.99)); s.runner_length_mm = rnd(0, 1) < 0.6 ? 0.0 : rnd(150, 600);
+      s.carb_cfm = rnd(0, 1) < 0.15 ? 0.0 : rnd(250, 2000); s.carbureted = rnd(0, 1) < 0.8;
+      s.air_filter_restriction = rnd(0, 0.15); s.header = int(rnd(0, 4.99));
+      s.primary_diameter_mm = rnd(0, 1) < 0.6 ? 0.0 : rnd(35, 60); s.primary_length_mm = rnd(0, 1) < 0.6 ? 0.0 : rnd(250, 1100);
+      s.pipe_diameter_mm = rnd(45, 90); s.dual_exhaust = rnd(0, 1) < 0.7; s.muffler_restriction = rnd(0, 1);
+      s.ignition = int(rnd(0, 2.99)); s.fuel_octane = rnd(88, 110); s.rod_limit_rpm = rnd(5000, 9500);
+      const DynoResult r = RunDyno(s, rnd(0, 1) < 0.5 ? 10000.0 : rnd(6000, 12000));
+      if (!AllFinite(r) || r.peak_torque_nm <= 0.0) ++bad;
+      // Well above valve float, where the torque is the small difference of falling imep and rising friction, the
+      // roll-off is allowed to be steeper; the usable range (to 500 rpm past the safe rpm) must stay within 6%.
+      const double j = MaxJump(r, r.safe_rpm + 500.0), j_all = MaxJump(r);
+      worst = std::fmax(worst, j);
+      worst_all = std::fmax(worst_all, j_all);
+      if (j > 0.06) ++rough;
+      if (j_all > 0.10) ++rough_all;
+      if (j > 0.06 && verbose && rough < 12) {
+        int at = 1;
+        for (int i = 1; i < DynoResult::kPoints && r.rpm_at(i - 1) <= r.safe_rpm + 500.0; ++i)
+          if (std::fabs(r.torque_nm[i] - r.torque_nm[i - 1]) >= j * r.peak_torque_nm - 1e-9) at = i;
+        std::printf("      rough %.3f at %.0f rpm (max %.0f): safe %.0f float %.0f peak %.0f@%.0f cr %.1f oct %.0f cfm %.0f\n", j,
+                    r.rpm_at(at), r.rpm_max, r.safe_rpm, r.valve_float_rpm, r.peak_torque_nm, r.peak_torque_rpm, s.compression,
+                    s.fuel_octane, s.carb_cfm);
+      }
+    }
+    Check(bad == 0, "fuzz: 3000 random specs finite, positive peak", "%.0f bad", bad);
+    Check(rough == 0, "fuzz: max step < 6% of peak to safe rpm + 500", "worst %.3f (%.0f over)", worst, rough);
+    Check(rough_all == 0, "fuzz: max step < 10% of peak everywhere", "worst %.3f (%.0f over)", worst_all, rough_all);
   }
 
   // --- Directions of part effects --------------------------------------------------------------------------------
@@ -302,7 +354,12 @@ int main(int argc, char** argv) {
     Check(loaded && cat.errors.empty(), "shipped catalogue parses without errors", "%.0f engines, %.0f parts",
           double(cat.engines.size()), double(cat.parts.size()));
     for (const std::string& err : cat.errors) std::printf("      %s\n", err.c_str());
+    // Every part on every engine it fits: finite, smooth, a build/stock ratio inside 0.5..1.8 over 1500 rpm .. stock
+    // safe rpm, and no single part adding more than 45% peak power.
     bool ok = true;
+    int ratio_bad = 0, gain_bad = 0, builds = 0;
+    double rmin = 9.0, rmax = 0.0, gmax = 0.0;
+    std::string rmin_at, rmax_at, gmax_at;
     for (const auto& [id, e] : cat.engines) {
       const DynoResult r = RunDyno(StockSpec(e));
       if (!AllFinite(r) || MaxJump(r) > 0.06 || r.peak_torque_nm <= 0.0) {
@@ -314,12 +371,29 @@ int main(int argc, char** argv) {
         int32_t parts[kNumSlots] = {};
         parts[p.slot] = pid;
         const DynoResult rp = RunDyno(BuildSpec(cat, e, parts));
-        if (!AllFinite(rp) || MaxJump(rp) > 0.08 || rp.peak_torque_nm <= 0.0) {
+        ++builds;
+        if (!AllFinite(rp) || MaxJump(rp, rp.safe_rpm + 500.0) > 0.06 || rp.peak_torque_nm <= 0.0) {
           ok = false;
           std::printf("      engine %d + part %d not sane\n", int(id), int(pid));
         }
+        const std::string tag = std::to_string(id) + "+" + std::to_string(pid) + " " + p.name;
+        bool rb = false;
+        for (double rpm = 1500.0; rpm <= r.safe_rpm; rpm += 100.0) {
+          const double q = TorqueAt(rp, rpm) / TorqueAt(r, rpm);
+          if (q < rmin) { rmin = q; rmin_at = tag + " @" + std::to_string(int(rpm)); }
+          if (q > rmax) { rmax = q; rmax_at = tag + " @" + std::to_string(int(rpm)); }
+          rb = rb || q < 0.5 || q > 1.8;
+        }
+        ratio_bad += rb;
+        const double g = rp.peak_power_kw / r.peak_power_kw - 1.0;
+        if (g > gmax) { gmax = g; gmax_at = tag; }
+        gain_bad += g > 0.45;
       }
     }
+    std::printf("      %d single-part builds; ratio range %.3f (%s) .. %.3f (%s); best power gain %+.1f%% (%s)\n",
+                builds, rmin, rmin_at.c_str(), rmax, rmax_at.c_str(), 100.0 * gmax, gmax_at.c_str());
+    Check(ratio_bad == 0, "single-part build/stock ratio within 0.5..1.8", "%.0f builds outside", ratio_bad);
+    Check(gain_bad == 0, "no single part adds > 45% peak power", "%.0f parts over", gain_bad);
     Check(ok, "every stock engine and single-part build is finite and smooth");
   }
 
