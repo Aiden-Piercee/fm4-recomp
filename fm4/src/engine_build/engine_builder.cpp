@@ -344,10 +344,17 @@ void EngineBuilderSetPlayerCar(uint32_t car_phys) {
   eb::g_race_started = true;
 }
 
-float EngineBuilderTorqueRatio(uint32_t car_phys, float rpm) {
-  if (car_phys != eb::g_player.load() || !eb::BuilderEnabled()) return 1.0f;
+// True when the player car has a build that applies in the current event (same gate as the torque ratio).
+bool EngineBuilderActive(uint32_t car_phys) {
+  if (car_phys != eb::g_player.load() || !eb::BuilderEnabled()) return false;
   const int career = eb::g_career.load();
-  if (career < 0 || (career > 0 && !eb::CareerAllowed())) return 1.0f;
+  if (career < 0 || (career > 0 && !eb::CareerAllowed())) return false;
+  std::lock_guard<std::mutex> lock(eb::g_mu);
+  return eb::g_live.active && eb::g_live.rpm_max > 0.0;
+}
+
+float EngineBuilderTorqueRatio(uint32_t car_phys, float rpm) {
+  if (!EngineBuilderActive(car_phys)) return 1.0f;
   std::lock_guard<std::mutex> lock(eb::g_mu);
   const eb::LiveBuild& b = eb::g_live;
   if (!b.active || !(b.rpm_max > 0.0)) return 1.0f;

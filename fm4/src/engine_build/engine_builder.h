@@ -66,6 +66,8 @@ DynoResult RunFor(const StockEngine& e, const int32_t (*parts)[kNumSlots]);
 void EngineBuilderSetGarage(int garage_id);
 // overheat.cpp: the engine substep saw a new player car object.
 void EngineBuilderSetPlayerCar(uint32_t car_phys);
+// True when the player car has a build that applies in the current event (the part tune then keeps only wear).
+bool EngineBuilderActive(uint32_t car_phys);
 // overheat.cpp: torque multiplier at this rpm for this car (1 when no build applies).
 float EngineBuilderTorqueRatio(uint32_t car_phys, float rpm);
 // overheat.cpp: rev limiter for this car in rad/s, or 0 to leave it. stock_rad_s is the limiter the game set.

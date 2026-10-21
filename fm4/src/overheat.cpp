@@ -92,12 +92,13 @@ bool EngineReliabilityEnabled();
 void EngineReliabilitySetProvider(EngineReliabilityProvider fn);
 // part_tune.cpp (Performance Parts thread)
 void PartTuneRegister();
-float PartTuneTorqueMult(uint32_t car_phys, float rpm);
+float PartTuneTorqueMult(uint32_t car_phys, float rpm, bool shape = true);
 void PartTuneSetPlayerCar(uint32_t car_phys);
 void PartTuneForgetCar(uint32_t car_phys);
 // engine_build/engine_builder.cpp: parts-based engine builds (docs/ENGINE_BUILDER.md).
 void EngineBuilderSetPlayerCar(uint32_t car_phys);
 float EngineBuilderTorqueRatio(uint32_t car_phys, float rpm);
+bool EngineBuilderActive(uint32_t car_phys);
 float EngineBuilderLimiter(uint32_t car_phys, float current_rad_s);
 
 namespace {
@@ -707,7 +708,9 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
   if (running) {
     const float cur = LdF(e + kMult);
     const float base = (s.tuned_mult > 0.0f && cur == s.tuned_mult) ? s.base_mult : cur;
-    const float tuned = base * PartTuneTorqueMult(e, omega * 9.5493f) * EngineBuilderTorqueRatio(e, omega * 9.5493f);
+    const float rpm_now = omega * 9.5493f;
+    // An active engine build sets the curve shape itself, so the part tune keeps only its wear term then.
+    const float tuned = base * PartTuneTorqueMult(e, rpm_now, !EngineBuilderActive(e)) * EngineBuilderTorqueRatio(e, rpm_now);
     if (tuned > 0.0f && tuned == tuned) { StF(e + kMult, tuned); s.base_mult = base; s.tuned_mult = LdF(e + kMult); }
   }
 

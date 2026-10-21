@@ -142,13 +142,16 @@ void PartTuneRegister() { EngineReliabilitySetProvider(&Provider); }
 
 // Multiplier for the engine power at this rpm. 1.0 when the feature is off or the car has no cached tune.
 // Cheap: one map lookup and a few multiplications; safe to call every substep.
-float PartTuneTorqueMult(uint32_t car_phys, float rpm) {
-  if (!g_tune_on.load() && !g_wear_on.load()) return 1.0f;
+// shape = false leaves out the cam / fuel system tune character and keeps only wear: the engine builder passes
+// false while a build is active, because its own model already decides the curve shape from the fitted parts.
+float PartTuneTorqueMult(uint32_t car_phys, float rpm, bool shape) {
+  const bool tune_on = shape && g_tune_on.load();
+  if (!tune_on && !g_wear_on.load()) return 1.0f;
   CarTune t;
   { std::lock_guard<std::mutex> lk(g_mu); auto it = g_cars.find(car_phys); if (it == g_cars.end()) return 1.0f; t = it->second; }
   float x = Clamp(rpm / std::max(1000.0f, t.redline_rpm) - t.peak_shift, 0.0f, 1.2f);  // position in the rev range
   float m = 1.0f;
-  if (g_tune_on.load()) {
+  if (tune_on) {
     float wl = Smooth(1.0f - x / 0.45f), wh = Smooth((x - 0.55f) / 0.45f), wm = 1.0f - wl - wh;  // low/mid/high blend
     m = std::max(0.0f, wl) * t.low + std::max(0.0f, wm) * t.mid + std::max(0.0f, wh) * t.high;
   }

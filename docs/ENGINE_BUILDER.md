@@ -32,6 +32,8 @@ ratio(rpm) = Dyno(build, rpm) / Dyno(stock, rpm) / (product of the fitted FM4 en
 
 clamped to 0.35..2.2. Dividing out the FM4 upgrade scalars (Valves, Displacement, PistonsCompression, FuelSystem, Ignition, Exhaust, Intake, Manifold, Camshaft peak) means FM4 engine upgrades bought in the stock shop do not stack with the build; the builder overlay says so. Forced induction (FM4 turbo / supercharger levels) still applies on top, unchanged.
 
+The Evolution part tune (`part_tune.cpp`: the cam / fuel system tune character from `Evolution_PartTune`) is left out while a build is active, since the build's model already sets the curve shape; its engine wear term still applies. An FM4 shop camshaft still swaps FM4's own curve, which is the stock reference, so its shape stays under a build (the overlay warns); for a clean comparison put the FM4 camshaft back to stock.
+
 ### Rev limit
 
 With an active build the rev limiter E+3636 is set to the build's safe rpm minus 100, but only within the stock curve's range (`TorqueCurveMaxRPM` of the fitted camshaft row minus 150). It is never lowered below the stock limiter.
