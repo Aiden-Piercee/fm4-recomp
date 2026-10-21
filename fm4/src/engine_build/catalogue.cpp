@@ -189,6 +189,7 @@ void ApplyMods(EngineSpec& s, const std::vector<Mod>& mods, int* unknown) {
     else if (k == "icl") Apply(s.intake_centerline, m);
     else if (k == "lifter") Apply(s.lifter, m);
     else if (k == "rocker") Apply(s.rocker_ratio, m);
+    else if (k == "nrocker") Apply(s.nominal_rocker_ratio, m);
     else if (k == "float") Apply(s.valve_float_rpm, m);
     else if (k == "intake") Apply(s.intake, m);
     else if (k == "runner") Apply(s.runner_length_mm, m);

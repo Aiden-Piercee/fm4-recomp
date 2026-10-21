@@ -80,7 +80,7 @@ UTF-8, tab-separated, `#` comments. Looked up in the user data root, then the wo
 
 Slots: `heads`, `cam`, `valvetrain`, `pistons`, `rotating`, `intake`, `carb`, `headers`, `exhaust`, `ignition`.
 
-Keys: `bore stroke cyl rod cr rmass rodrpm vpc ivd evd port portcc idur edur ilift elift lsa icl lifter rocker float intake runner cfm carb filter header pdia plen pipe duals muffler ign octane`. Enum values are the numbers in `dyno.h`.
+Keys: `bore stroke cyl rod cr rmass rodrpm vpc ivd evd port portcc idur edur ilift elift lsa icl lifter rocker nrocker float intake runner cfm carb filter header pdia plen pipe duals muffler ign octane`. Enum values are the numbers in `dyno.h`.
 
 ## Testing
 

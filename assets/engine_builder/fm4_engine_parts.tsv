@@ -1,0 +1,549 @@
+# Forza Motorsport 4 engine builder: parts catalogue (Forza-4-Evolution).
+# Format: docs/ENGINE_BUILDER.md, "Catalogue format". Tab separated, UTF-8, '#' starts a comment line.
+#
+#   F  <family> <display name>
+#   E  <EngineID> <family> <display name> <key=value ...>        stock geometry of an FM4 engine (by EngineID)
+#   P  <PartId> <slot> <families|*> <brand> <name> <year> <price> <mass_kg> <key=value | key+=value | key*=value ...>
+#
+# CLEANROOM: authored for this project from public real-world knowledge only (manufacturer engine specifications and
+# ordinary aftermarket part specs). Nothing here comes from Motor City Online or any other game's data. Every brand
+# except "Factory" is fictional. FM4 data used: EngineID, displacement, compression ratio and carbureted flag of each
+# pilot engine and the car it sits in (to pick the factory engine); no FM4 torque curves are reproduced.
+#
+# Units and conventions
+#   bore, stroke, rod, ivd, evd, pdia, plen, pipe, runner: millimetres (pipe is the diameter of each side)
+#   cr: static compression ratio. rmass: crank+rods+pistons kg. rodrpm, float: rpm.
+#   idur, edur: degrees of crank rotation at 0.050 in (1.27 mm) tappet lift. lsa: lobe separation, cam degrees.
+#   ilift, elift: valve lift in mm QUOTED AT THE NOMINAL 1.5:1 ROCKER (= lobe lift x 1.5). The model scales it by
+#       rocker/1.5, so the real valve lift is ilift x rocker / 1.5. Part names quote the real valve lift in inches
+#       at that family's stock rocker ratio (e.g. a Ford FE cam named .490 at 1.73:1 has ilift = 10.79).
+#   rocker: real rocker ratio. vpc: valves per cylinder. port: port efficiency, 1.0 = good production head.
+#   cfm: carburettor airflow at 1.5 inHg; for EFI (carb=0) the throttle body + runner airflow rating.
+#   filter: air cleaner restriction 0..0.1. muffler: 0 = open pipes .. 1 = very restrictive. octane: RON.
+#   Enums (dyno.h): lifter 0 hydraulic flat, 1 solid flat, 2 hydraulic roller, 3 solid roller;
+#       intake 0 dual plane, 1 single plane, 2 tunnel ram, 3 long-runner EFI, 4 log;
+#       header 0 cast log, 1 cast performance, 2 shorty, 3 long tube, 4 tri-Y; ign 0 points, 1 electronic, 2 CD.
+#   year: first model year the part is on sale. price: FM4 credits. mass_kg: change against the stock part.
+#   Parts apply in slot order heads, cam, valvetrain, pistons, rotating, intake, carb, headers, exhaust, ignition,
+#   so piston cr+= adds to the head's ratio. Piston parts are relative (bore+=, cr+=) so they fit every family.
+#   A cam always sets its lifter type. Valve springs set float (valve float rpm) directly.
+#
+# Part ids: SSFFNN. SS = slot (11 heads, 12 cam, 13 valvetrain, 14 pistons, 15 rotating, 16 intake, 17 carb,
+#   18 headers, 19 exhaust, 20 ignition), FF = family number below (00 = generic, fits every family), NN = sequence.
+#   Ids are saved in player profiles: never renumber or reuse one, only add.
+
+# ------------------------------------------------------------------ families (number = FF in part ids)
+# 01 FORD_Y: stock rocker 1.54, from 1955
+# 02 CHEVY_SB: stock rocker 1.5, from 1955
+# 03 CHEVY_W: stock rocker 1.75, from 1958
+# 04 CHEVY_BB: stock rocker 1.7, from 1965
+# 05 CHEVY_LT: stock rocker 1.6, from 1992
+# 06 FORD_FE: stock rocker 1.76, from 1958
+# 07 FORD_WINDSOR: stock rocker 1.6, from 1962
+# 08 FORD_CLEVELAND: stock rocker 1.73, from 1970
+# 09 FORD_385: stock rocker 1.73, from 1968
+# 10 FORD_BOSS429: stock rocker 1.5, from 1969
+# 11 MOPAR_B_RB: stock rocker 1.5, from 1958
+# 12 MOPAR_HEMI: stock rocker 1.5, from 1964
+# 13 PONTIAC_V8: stock rocker 1.5, from 1955
+# 14 OLDS_V8: stock rocker 1.6, from 1955
+# 15 AMC_V8: stock rocker 1.6, from 1966
+F	FORD_Y	Ford Y-block V8 (272/292/312)
+F	CHEVY_SB	Chevrolet small-block V8, Gen I (265-400)
+F	CHEVY_W	Chevrolet W-series V8 (348/409/427 Z-11)
+F	CHEVY_BB	Chevrolet big-block V8, Mark IV (396-454)
+F	CHEVY_LT	Chevrolet small-block V8, Gen II (LT1/LT4)
+F	FORD_FE	Ford FE V8 (352/390/406/427/428)
+F	FORD_WINDSOR	Ford Windsor small-block V8 (260/289/302/351W)
+F	FORD_CLEVELAND	Ford 335-series V8 (351C/351 Boss)
+F	FORD_385	Ford 385-series V8 (429/460)
+F	FORD_BOSS429	Ford Boss 429 semi-hemi V8
+F	MOPAR_B_RB	Chrysler B/RB wedge V8 (383/413/426W/440)
+F	MOPAR_HEMI	Chrysler 426 Hemi V8
+F	PONTIAC_V8	Pontiac V8 (326-455)
+F	OLDS_V8	Oldsmobile Rocket V8 (350-455)
+F	AMC_V8	AMC V8, Gen III (304-401)
+
+# ------------------------------------------------------------------ stock engines (FM4 EngineID)
+# 743: FM4 car is supercharged; boost is applied by FM4 on top
+E	743	FORD_Y	Ford 312 V8 (Thunderbird F-code, supercharged)	bore=96.52	stroke=87.38	cyl=8	rod=159.8	cr=8.5	rmass=34	rodrpm=5800	vpc=2	ivd=48.8	evd=38.4	port=0.85	idur=204	edur=204	ilift=10.02	elift=10.02	lsa=112	lifter=1	rocker=1.54	intake=0	cfm=450	carb=1	filter=0.08	header=0	pipe=50.8	duals=1	muffler=0.6	ign=0	octane=98
+# 541: Rochester mechanical injection: carb=0, ram-tube plenum modelled as long-runner
+E	541	CHEVY_SB	Chevrolet 283 V8 (fuel injection, 290 hp)	bore=98.42	stroke=76.2	cyl=8	rod=144.8	cr=11	rmass=30	rodrpm=6800	vpc=2	ivd=43.7	evd=38.1	port=0.95	idur=222	edur=222	ilift=10.01	elift=10.13	lsa=110	lifter=1	rocker=1.5	intake=3	cfm=550	carb=0	filter=0.05	header=1	pipe=50.8	duals=1	muffler=0.5	ign=0	octane=100
+E	760	CHEVY_W	Chevrolet 409 V8 (425 hp, dual 4-barrel)	bore=109.54	stroke=88.9	cyl=8	rod=155.8	cr=11	rmass=38	rodrpm=6200	vpc=2	ivd=55.6	evd=43.7	port=0.95	idur=232	edur=232	ilift=9.58	elift=9.58	lsa=112	lifter=1	rocker=1.75	intake=0	cfm=900	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	60	FORD_FE	Ford 427 V8 (Cobra, medium riser)	bore=107.52	stroke=96.11	cyl=8	rod=164.8	cr=10.4	rmass=42	rodrpm=6800	vpc=2	ivd=53.1	evd=42.2	port=1	idur=232	edur=232	ilift=10.82	elift=10.82	lsa=114	lifter=1	rocker=1.76	intake=0	cfm=1100	carb=1	filter=0.03	header=3	pdia=48	plen=760	pipe=57.1	duals=1	muffler=0.3	ign=0	octane=100
+E	609	FORD_WINDSOR	Ford 289 V8 (Cobra Daytona race)	bore=101.6	stroke=72.9	cyl=8	rod=130.9	cr=10.8	rmass=27	rodrpm=7800	vpc=2	ivd=45.2	evd=36.8	port=1.1	idur=248	edur=248	ilift=11.91	elift=11.91	lsa=108	lifter=1	rocker=1.6	intake=1	cfm=850	carb=1	filter=0	header=3	pdia=41	plen=860	pipe=57.1	duals=1	muffler=0.15	ign=0	octane=102
+E	388	FORD_FE	Ford 427 V8 (GT40 Mk II race)	bore=107.59	stroke=96.04	cyl=8	rod=164.8	cr=10.5	rmass=42	rodrpm=7000	vpc=2	ivd=55.6	evd=43.9	port=1.1	idur=248	edur=248	ilift=11.69	elift=11.69	lsa=110	lifter=1	rocker=1.76	intake=0	cfm=1100	carb=1	filter=0.02	header=3	pdia=51	plen=860	pipe=63.5	duals=1	muffler=0.1	ign=0	octane=102
+E	66	CHEVY_BB	Chevrolet 427 V8 (L71, 435 hp tri-power)	bore=107.98	stroke=95.5	cyl=8	rod=155.8	cr=11	rmass=42	rodrpm=6500	vpc=2	ivd=55.6	evd=43.7	port=1.05	idur=242	edur=254	ilift=11.65	elift=11.65	lsa=114	lifter=1	rocker=1.7	intake=0	cfm=950	carb=1	filter=0.04	header=1	pipe=63.5	duals=1	muffler=0.45	ign=0	octane=100
+E	35	MOPAR_B_RB	Chrysler 383 V8 (Barracuda Formula S)	bore=107.95	stroke=85.72	cyl=8	rod=161.5	cr=10	rmass=40	rodrpm=5800	vpc=2	ivd=52.8	evd=44.2	port=0.95	idur=208	edur=216	ilift=11.43	elift=11.63	lsa=112	lifter=0	rocker=1.5	intake=0	cfm=650	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	192	FORD_FE	Ford 428 Cobra Jet V8 (GT500KR)	bore=104.9	stroke=101.09	cyl=8	rod=164.8	cr=10.7	rmass=44	rodrpm=5800	vpc=2	ivd=53.1	evd=42.2	port=0.95	idur=212	edur=220	ilift=10.79	elift=10.79	lsa=115	lifter=0	rocker=1.73	intake=0	cfm=735	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	43	CHEVY_BB	Chevrolet 396 V8 (L78, 375 hp)	bore=103.99	stroke=95.5	cyl=8	rod=155.8	cr=11	rmass=41	rodrpm=6500	vpc=2	ivd=55.6	evd=43.7	port=1.05	idur=242	edur=254	ilift=11.65	elift=11.65	lsa=114	lifter=1	rocker=1.7	intake=0	cfm=800	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	44	CHEVY_SB	Chevrolet 302 V8 (Z/28)	bore=101.6	stroke=76.2	cyl=8	rod=144.8	cr=11	rmass=28	rodrpm=7500	vpc=2	ivd=51.3	evd=40.6	port=1	idur=254	edur=254	ilift=11.66	elift=11.66	lsa=114	lifter=1	rocker=1.5	intake=0	cfm=780	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	267	MOPAR_B_RB	Chrysler 440 Magnum V8 (Charger R/T)	bore=109.73	stroke=95.25	cyl=8	rod=171.9	cr=10	rmass=45	rodrpm=5600	vpc=2	ivd=52.8	evd=44.2	port=0.95	idur=212	edur=220	ilift=11.43	elift=11.81	lsa=112	lifter=0	rocker=1.5	intake=0	cfm=650	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	508	MOPAR_HEMI	Chrysler 426 Hemi V8 (1969, solid lifter)	bore=107.95	stroke=95.25	cyl=8	rod=174.2	cr=10.25	rmass=46	rodrpm=6800	vpc=2	ivd=57.1	evd=49.3	port=1.1	idur=236	edur=236	ilift=12.19	elift=12.19	lsa=112	lifter=1	rocker=1.5	intake=0	cfm=1100	carb=1	filter=0.04	header=1	pipe=63.5	duals=1	muffler=0.5	ign=0	octane=100
+E	769	PONTIAC_V8	Pontiac 400 Ram Air III V8 (GTO Judge)	bore=104.65	stroke=95.25	cyl=8	rod=168.3	cr=10.8	rmass=42	rodrpm=5800	vpc=2	ivd=53.6	evd=45	port=1	idur=212	edur=222	ilift=11.94	elift=11.94	lsa=113	lifter=0	rocker=1.5	intake=0	cfm=750	carb=1	filter=0.03	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+# 796: FM4 displacement 7446 cc is the 455
+E	796	OLDS_V8	Oldsmobile 455 V8 (4-4-2 W-30)	bore=104.8	stroke=107.95	cyl=8	rod=171.1	cr=10.5	rmass=47	rodrpm=5400	vpc=2	ivd=52.6	evd=41.4	port=0.95	idur=218	edur=228	ilift=11.29	elift=11.29	lsa=114	lifter=0	rocker=1.6	intake=0	cfm=750	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	797	PONTIAC_V8	Pontiac 400 Ram Air III V8 (Firebird Trans Am)	bore=104.65	stroke=95.25	cyl=8	rod=168.3	cr=10.75	rmass=42	rodrpm=5800	vpc=2	ivd=53.6	evd=45	port=1	idur=212	edur=222	ilift=11.94	elift=11.94	lsa=113	lifter=0	rocker=1.5	intake=0	cfm=750	carb=1	filter=0.03	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	53	CHEVY_BB	Chevrolet 454 V8 (LS6, Chevelle SS)	bore=107.98	stroke=101.6	cyl=8	rod=155.8	cr=11.25	rmass=46	rodrpm=6200	vpc=2	ivd=55.6	evd=47.8	port=1.05	idur=242	edur=250	ilift=11.65	elift=11.65	lsa=114	lifter=1	rocker=1.7	intake=0	cfm=780	carb=1	filter=0.05	header=1	pipe=63.5	duals=1	muffler=0.5	ign=0	octane=100
+E	69	CHEVY_SB	Chevrolet 350 LT-1 V8 (Corvette ZR1)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=11	rmass=31	rodrpm=7000	vpc=2	ivd=51.3	evd=40.6	port=1	idur=242	edur=254	ilift=11.66	elift=12.32	lsa=115	lifter=1	rocker=1.5	intake=0	cfm=780	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	158	FORD_BOSS429	Ford Boss 429 V8	bore=110.74	stroke=91.19	cyl=8	rod=167.8	cr=10.5	rmass=44	rodrpm=6800	vpc=2	ivd=57.9	evd=48.3	port=1.05	idur=228	edur=228	ilift=12.7	elift=12.7	lsa=114	lifter=1	rocker=1.5	intake=0	cfm=735	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	418	MOPAR_HEMI	Chrysler 426 Hemi V8 (Challenger, hydraulic)	bore=107.95	stroke=95.25	cyl=8	rod=174.2	cr=10.25	rmass=46	rodrpm=6800	vpc=2	ivd=57.1	evd=49.3	port=1.1	idur=222	edur=234	ilift=12.45	elift=12.22	lsa=113	lifter=0	rocker=1.5	intake=0	cfm=1100	carb=1	filter=0.04	header=1	pipe=63.5	duals=1	muffler=0.5	ign=0	octane=100
+# 740: FM4 6997 cc; the Eliminator's big-block option was the 428 CJ
+E	740	FORD_FE	Ford 428 Cobra Jet V8 (Cougar Eliminator)	bore=104.9	stroke=101.09	cyl=8	rod=164.8	cr=10.6	rmass=44	rodrpm=5800	vpc=2	ivd=53.1	evd=42.2	port=0.95	idur=212	edur=220	ilift=10.79	elift=10.79	lsa=115	lifter=0	rocker=1.73	intake=0	cfm=735	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	751	CHEVY_BB	Chevrolet 454 V8 (LS6, El Camino SS)	bore=107.98	stroke=101.6	cyl=8	rod=155.8	cr=11.25	rmass=46	rodrpm=6200	vpc=2	ivd=55.6	evd=47.8	port=1.05	idur=242	edur=250	ilift=11.65	elift=11.65	lsa=114	lifter=1	rocker=1.7	intake=0	cfm=780	carb=1	filter=0.05	header=1	pipe=63.5	duals=1	muffler=0.5	ign=0	octane=100
+E	790	CHEVY_SB	Chevrolet 350 LT-1 V8 (Camaro Z/28)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=11	rmass=31	rodrpm=7000	vpc=2	ivd=51.3	evd=40.6	port=1	idur=242	edur=254	ilift=11.66	elift=12.32	lsa=115	lifter=1	rocker=1.5	intake=0	cfm=780	carb=1	filter=0.05	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	727	AMC_V8	AMC 401 V8 (Javelin AMX)	bore=105.79	stroke=93.47	cyl=8	rod=148.8	cr=9.5	rmass=40	rodrpm=5600	vpc=2	ivd=51.4	evd=42.7	port=0.95	idur=206	edur=214	ilift=11.36	elift=11.36	lsa=112	lifter=0	rocker=1.6	intake=0	cfm=600	carb=1	filter=0.05	header=0	pipe=57.1	duals=1	muffler=0.55	ign=0	octane=98
+E	737	MOPAR_HEMI	Chrysler 426 Hemi V8 ('Cuda, hydraulic)	bore=107.95	stroke=95.25	cyl=8	rod=174.2	cr=10.2	rmass=46	rodrpm=6800	vpc=2	ivd=57.1	evd=49.3	port=1.1	idur=222	edur=234	ilift=12.45	elift=12.22	lsa=113	lifter=0	rocker=1.5	intake=0	cfm=1100	carb=1	filter=0.04	header=1	pipe=63.5	duals=1	muffler=0.5	ign=0	octane=100
+E	780	FORD_385	Ford 429 Super Cobra Jet V8 (Mustang Mach 1)	bore=110.74	stroke=91.19	cyl=8	rod=167.8	cr=11.3	rmass=44	rodrpm=6200	vpc=2	ivd=56.9	evd=43.7	port=1	idur=228	edur=228	ilift=11.21	elift=11.21	lsa=115	lifter=1	rocker=1.73	intake=0	cfm=780	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.5	ign=0	octane=100
+E	453	PONTIAC_V8	Pontiac 455 Super Duty V8 (Trans Am)	bore=105.41	stroke=106.93	cyl=8	rod=168.3	cr=8.4	rmass=47	rodrpm=5600	vpc=2	ivd=53.6	evd=45	port=1.1	idur=214	edur=226	ilift=10.34	elift=10.49	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=800	carb=1	filter=0.04	header=1	pipe=57.1	duals=1	muffler=0.55	ign=0	octane=95
+E	738	FORD_CLEVELAND	Ford 351 Cleveland 4V V8 (XB Falcon GT)	bore=101.6	stroke=88.9	cyl=8	rod=146.8	cr=9.1	rmass=32	rodrpm=6200	vpc=2	ivd=55.6	evd=43.4	port=1.05	idur=202	edur=214	ilift=9.4	elift=9.78	lsa=116	lifter=0	rocker=1.73	intake=0	cfm=600	carb=1	filter=0.06	header=1	pipe=57.1	duals=1	muffler=0.55	ign=0	octane=97
+# 736: FM4 6600 cc; the 1977 T/A 6.6 was the Pontiac 400 W72 (the Olds 403 6.6 is the alternative)
+E	736	PONTIAC_V8	Pontiac 400 V8 (T/A 6.6, W72)	bore=104.65	stroke=95.25	cyl=8	rod=168.3	cr=8.2	rmass=42	rodrpm=5400	vpc=2	ivd=53.6	evd=45	port=0.95	idur=200	edur=210	ilift=10.52	elift=10.49	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=800	carb=1	filter=0.08	header=0	pipe=63.5	duals=0	muffler=0.65	ign=1	octane=91
+E	513	FORD_WINDSOR	Ford 302 V8 (2-barrel, King Cobra)	bore=101.6	stroke=76.2	cyl=8	rod=129.3	cr=8.4	rmass=27	rodrpm=5500	vpc=2	ivd=45.2	evd=36.8	port=0.85	idur=188	edur=196	ilift=9.1	elift=9.45	lsa=114	lifter=0	rocker=1.6	intake=0	cfm=350	carb=1	filter=0.08	header=0	pipe=57.1	duals=0	muffler=0.7	ign=1	octane=91
+E	511	CHEVY_SB	Chevrolet 350 V8 (LM1, Camaro Z28)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=8.2	rmass=31	rodrpm=5500	vpc=2	ivd=49.3	evd=38.1	port=0.9	idur=194	edur=202	ilift=9.91	elift=10.41	lsa=114	lifter=0	rocker=1.5	intake=0	cfm=750	carb=1	filter=0.07	header=0	pipe=57.1	duals=0	muffler=0.65	ign=1	octane=91
+# 489: EFI: cfm is the throttle body + runner airflow rating
+E	489	CHEVY_SB	Chevrolet 350 TPI V8 (L98, Trans Am GTA)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=9.3	rmass=31	rodrpm=5800	vpc=2	ivd=49.3	evd=38.1	port=0.95	idur=202	edur=206	ilift=10.24	elift=10.54	lsa=115	lifter=2	rocker=1.5	intake=3	cfm=650	carb=0	filter=0.05	header=1	pipe=57.1	duals=0	muffler=0.55	ign=1	octane=95
+E	477	CHEVY_SB	Chevrolet 350 TPI V8 (L98, Camaro IROC-Z)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=9.3	rmass=31	rodrpm=5800	vpc=2	ivd=49.3	evd=38.1	port=0.95	idur=202	edur=206	ilift=10.24	elift=10.54	lsa=115	lifter=2	rocker=1.5	intake=3	cfm=650	carb=0	filter=0.05	header=1	pipe=57.1	duals=0	muffler=0.55	ign=1	octane=95
+E	481	FORD_WINDSOR	Ford 5.0 HO V8 (SVT Cobra R, GT40 heads)	bore=101.6	stroke=76.2	cyl=8	rod=129.3	cr=9	rmass=26	rodrpm=6000	vpc=2	ivd=46.7	evd=39.1	port=1	idur=204	edur=210	ilift=10.74	elift=10.74	lsa=115	lifter=2	rocker=1.7	intake=3	cfm=700	carb=0	filter=0.04	header=2	pdia=41	plen=380	pipe=57.1	duals=1	muffler=0.45	ign=1	octane=95
+E	64	CHEVY_LT	Chevrolet 350 LT4 V8 (Corvette Grand Sport)	bore=101.6	stroke=88.39	cyl=8	rod=144.8	cr=10.8	rmass=30	rodrpm=6500	vpc=2	ivd=50.8	evd=39.4	port=1.15	idur=218	edur=228	ilift=12.5	elift=12.5	lsa=114	lifter=2	rocker=1.6	intake=3	cfm=900	carb=0	filter=0.03	header=2	pdia=41	plen=400	pipe=63.5	duals=1	muffler=0.4	ign=1	octane=98
+
+# ------------------------------------------------------------------ parts
+# ---- heads
+P	110101	heads	FORD_Y	Factory	312 heads (stock replacement)	1956	600	0	ivd=48.8	evd=38.4	port=0.85
+P	110102	heads	FORD_Y	Factory	1957 competition heads	1957	1100	0	ivd=51.3	evd=39.1	port=0.95	cr+=0.3
+P	110103	heads	FORD_Y	Blackstone Cylinder Heads	Ported iron Y-block heads	1960	1700	0	ivd=51.3	evd=40.6	port=1.05	cr+=0.3
+P	110104	heads	FORD_Y	Ironwood Performance	Aluminum race Y-block heads	1968	4200	-16	ivd=52.1	evd=40.6	port=1.15	cr+=0.5
+P	110201	heads	CHEVY_SB	Factory	1.94 'fuelie' heads	1961	900	0	ivd=49.3	evd=38.1	port=0.98	cr+=0.3
+P	110202	heads	CHEVY_SB	Factory	2.02 double-hump heads	1964	1200	0	ivd=51.3	evd=40.6	port=1	cr+=0.3
+P	110203	heads	CHEVY_SB	Blackstone Cylinder Heads	Competition ported iron 2.05/1.60	1962	2600	0	ivd=52.1	evd=40.6	port=1.15	cr+=0.3
+P	110204	heads	CHEVY_SB	Blackstone Cylinder Heads	Street ported iron 2.02/1.60	1966	1800	0	ivd=51.3	evd=40.6	port=1.08
+P	110205	heads	CHEVY_SB	Ironwood Performance	Aluminum street heads 2.02/1.60	1978	3200	-20	ivd=51.3	evd=40.6	port=1.12	cr+=0.3
+P	110206	heads	CHEVY_SB	Factory	aluminum L98 heads 1.94/1.50	1986	1600	-20	ivd=49.3	evd=38.1	port=1.02
+P	110207	heads	CHEVY_SB	Ironwood Performance	Aluminum 18-degree race heads 2.08/1.60	1988	5800	-20	ivd=52.8	evd=40.6	port=1.28	cr+=0.5
+P	110301	heads	CHEVY_W	Factory	409 heads (2-barrel)	1961	700	0	ivd=52.6	evd=43.7	port=0.88	cr+=-0.5
+P	110302	heads	CHEVY_W	Factory	Z-11 427 heads	1963	2200	0	ivd=55.9	evd=43.7	port=1.08	cr+=0.5
+P	110303	heads	CHEVY_W	Blackstone Cylinder Heads	Ported race 409 heads 2.25/1.75	1964	2800	0	ivd=57.1	evd=44.4	port=1.15	cr+=0.3
+P	110304	heads	CHEVY_W	Ironwood Performance	Aluminum race W heads 2.25/1.75	1967	5200	-28	ivd=57.1	evd=44.4	port=1.2	cr+=0.5
+P	110401	heads	CHEVY_BB	Factory	oval-port heads 2.06/1.72	1965	700	0	ivd=52.3	evd=43.7	port=0.92	cr+=-0.3
+P	110402	heads	CHEVY_BB	Factory	rectangle-port iron heads 2.19/1.72	1965	1500	0	ivd=55.6	evd=43.7	port=1.05
+P	110403	heads	CHEVY_BB	Factory	L88 aluminum heads 2.19/1.84	1967	3800	-30	ivd=55.6	evd=46.7	port=1.1
+P	110404	heads	CHEVY_BB	Factory	open-chamber aluminum heads 2.19/1.88	1969	4800	-30	ivd=55.6	evd=47.8	port=1.15	cr+=-0.3
+P	110405	heads	CHEVY_BB	Blackstone Cylinder Heads	Ported rectangle-port iron 2.25/1.88	1970	2600	0	ivd=57.1	evd=47.8	port=1.15
+P	110406	heads	CHEVY_BB	Ironwood Performance	Aluminum race heads 2.30/1.88	1978	6000	-30	ivd=58.4	evd=47.8	port=1.28	cr+=0.3
+P	110407	heads	CHEVY_BB	Ironwood Performance	Aluminum oval-port street heads 2.19/1.88	1985	3600	-30	ivd=55.6	evd=47.8	port=1.08	cr+=0.3
+P	110501	heads	CHEVY_LT	Factory	LT1 aluminum heads 1.94/1.50	1992	1200	0	ivd=49.3	evd=38.1	port=1.05	cr+=-0.4
+P	110502	heads	CHEVY_LT	Factory	LT4 heads 2.00/1.55	1996	2000	0	ivd=50.8	evd=39.4	port=1.15
+P	110503	heads	CHEVY_LT	Blackstone Cylinder Heads	CNC-ported LT4 heads 2.02/1.60	1996	3600	0	ivd=51.3	evd=40.6	port=1.25	cr+=0.3
+P	110504	heads	CHEVY_LT	Ironwood Performance	Aluminum race LT heads 2.08/1.60	1995	5600	0	ivd=52.8	evd=40.6	port=1.3	cr+=0.5
+P	110601	heads	FORD_FE	Factory	390 GT heads 2.03/1.55	1966	800	0	ivd=51.6	evd=39.4	port=0.95
+P	110602	heads	FORD_FE	Factory	427 low-riser heads 2.09/1.66	1963	1400	0	ivd=53.1	evd=42.2	port=1
+P	110603	heads	FORD_FE	Factory	427 medium-riser heads 2.09/1.66	1964	1800	0	ivd=53.1	evd=42.2	port=1.05
+P	110604	heads	FORD_FE	Factory	427 high-riser heads 2.19/1.73	1964	3200	0	ivd=55.6	evd=43.9	port=1.15	cr+=0.3
+P	110605	heads	FORD_FE	Factory	427 tunnel-port heads 2.25/1.73	1968	4400	0	ivd=57.1	evd=43.9	port=1.22	cr+=0.3
+P	110606	heads	FORD_FE	Blackstone Cylinder Heads	Ported Cobra Jet iron 2.09/1.66	1969	1900	0	ivd=53.1	evd=42.2	port=1.08
+P	110607	heads	FORD_FE	Ironwood Performance	Aluminum street FE heads 2.09/1.66	1985	3400	-28	ivd=53.1	evd=42.2	port=1.12	cr+=0.3
+P	110701	heads	FORD_WINDSOR	Factory	289 HiPo heads 1.78/1.45	1963	700	0	ivd=45.2	evd=36.8	port=0.98	cr+=0.3
+P	110702	heads	FORD_WINDSOR	Factory	351W heads 1.84/1.54	1969	700	0	ivd=46.7	evd=39.1	port=1	cr+=-0.3
+P	110703	heads	FORD_WINDSOR	Factory	GT40 iron heads 1.84/1.54	1993	1100	0	ivd=46.7	evd=39.1	port=1.05
+P	110704	heads	FORD_WINDSOR	Blackstone Cylinder Heads	Ported iron heads 1.94/1.60	1968	1800	0	ivd=49.3	evd=40.6	port=1.1
+P	110705	heads	FORD_WINDSOR	Ironwood Performance	Le Mans-style aluminum race heads 1.94/1.60	1966	4800	-16	ivd=49.3	evd=40.6	port=1.22	cr+=0.5
+P	110706	heads	FORD_WINDSOR	Ironwood Performance	Aluminum street heads 1.90/1.60	1980	3000	-16	ivd=48.3	evd=40.6	port=1.15	cr+=0.3
+P	110801	heads	FORD_CLEVELAND	Factory	351C 2V open-chamber heads	1970	600	0	ivd=51.8	evd=41.9	port=0.95	cr+=-0.6
+P	110802	heads	FORD_CLEVELAND	Factory	351C 4V closed-chamber heads	1970	1000	0	ivd=55.6	evd=43.4	port=1.05
+P	110803	heads	FORD_CLEVELAND	Factory	Boss 351 4V heads	1971	1500	0	ivd=55.6	evd=43.4	port=1.08	cr+=0.3
+P	110804	heads	FORD_CLEVELAND	Factory	Australian 2V closed-chamber heads	1972	900	0	ivd=51.8	evd=41.9	port=1	cr+=0.4
+P	110805	heads	FORD_CLEVELAND	Blackstone Cylinder Heads	Ported 4V iron heads 2.19/1.71	1973	2200	0	ivd=55.6	evd=43.4	port=1.15
+P	110806	heads	FORD_CLEVELAND	Ironwood Performance	Aluminum race heads 2.20/1.71	1980	5600	-26	ivd=55.9	evd=43.4	port=1.28	cr+=0.3
+P	110901	heads	FORD_385	Factory	429 heads (closed chamber) 2.09/1.66	1968	700	0	ivd=53.1	evd=42.2	port=0.95	cr+=0.3
+P	110902	heads	FORD_385	Factory	429 Cobra Jet heads 2.24/1.72	1970	1400	0	ivd=56.9	evd=43.7	port=1.05
+P	110903	heads	FORD_385	Blackstone Cylinder Heads	Ported Cobra Jet iron 2.25/1.76	1972	2400	0	ivd=57.1	evd=44.7	port=1.13
+P	110904	heads	FORD_385	Ironwood Performance	Aluminum race heads 2.30/1.80	1978	5500	-30	ivd=58.4	evd=45.7	port=1.25	cr+=0.3
+P	110905	heads	FORD_385	Ironwood Performance	Aluminum street heads 2.19/1.76	1988	3600	-30	ivd=55.6	evd=44.7	port=1.12
+P	111001	heads	FORD_BOSS429	Factory	Boss 429 heads (stock replacement)	1969	2400	0	ivd=57.9	evd=48.3	port=1.05
+P	111002	heads	FORD_BOSS429	Factory	Boss 429 race-prep heads	1969	3800	0	ivd=57.9	evd=48.3	port=1.15	cr+=0.3
+P	111003	heads	FORD_BOSS429	Blackstone Cylinder Heads	Ported Boss 429 aluminum 2.30/1.94	1971	5200	0	ivd=58.4	evd=49.3	port=1.22	cr+=0.3
+P	111004	heads	FORD_BOSS429	Ironwood Performance	Semi-hemi race heads 2.35/1.94	1980	7200	-4	ivd=59.7	evd=49.3	port=1.3	cr+=0.5
+P	111101	heads	MOPAR_B_RB	Factory	906 heads 2.08/1.74	1967	800	0	ivd=52.8	evd=44.2	port=1
+P	111102	heads	MOPAR_B_RB	Factory	Max Wedge heads 2.08/1.88	1962	2600	0	ivd=52.8	evd=47.8	port=1.12	cr+=0.3
+P	111103	heads	MOPAR_B_RB	Factory	452 open-chamber heads	1972	600	0	ivd=52.8	evd=44.2	port=0.95	cr+=-0.5
+P	111104	heads	MOPAR_B_RB	Blackstone Cylinder Heads	Ported 906 iron 2.14/1.81	1970	2200	0	ivd=54.4	evd=46	port=1.12
+P	111105	heads	MOPAR_B_RB	Ironwood Performance	Aluminum race wedge heads 2.14/1.81	1978	5400	-28	ivd=54.4	evd=46	port=1.25	cr+=0.3
+P	111106	heads	MOPAR_B_RB	Ironwood Performance	Aluminum street wedge heads 2.14/1.81	1990	3400	-28	ivd=54.4	evd=46	port=1.15	cr+=0.3
+P	111201	heads	MOPAR_HEMI	Factory	426 street Hemi heads	1966	2400	0	ivd=57.1	evd=49.3	port=1.1
+P	111202	heads	MOPAR_HEMI	Factory	aluminum race Hemi heads	1965	4800	-30	ivd=57.1	evd=49.3	port=1.15	cr+=0.3
+P	111203	heads	MOPAR_HEMI	Blackstone Cylinder Heads	Ported iron Hemi heads 2.30/1.94	1970	3400	0	ivd=58.4	evd=49.3	port=1.22
+P	111204	heads	MOPAR_HEMI	Ironwood Performance	Aluminum race Hemi heads 2.35/1.94	1978	7000	-30	ivd=59.7	evd=49.3	port=1.32	cr+=0.3
+P	111301	heads	PONTIAC_V8	Factory	#670 D-port heads 2.11/1.77	1967	800	0	ivd=53.6	evd=45	port=1
+P	111302	heads	PONTIAC_V8	Factory	Ram Air IV round-port heads	1969	1800	0	ivd=53.6	evd=45	port=1.1
+P	111303	heads	PONTIAC_V8	Factory	455 HO round-port heads	1971	1400	0	ivd=53.6	evd=45	port=1.08	cr+=-0.5
+P	111304	heads	PONTIAC_V8	Factory	Super Duty heads	1973	2200	0	ivd=53.6	evd=45	port=1.12
+P	111305	heads	PONTIAC_V8	Blackstone Cylinder Heads	Ported D-port iron 2.11/1.77	1970	1800	0	ivd=53.6	evd=45	port=1.08
+P	111306	heads	PONTIAC_V8	Ironwood Performance	Aluminum race heads 2.19/1.77	1980	5200	-28	ivd=55.6	evd=45	port=1.25	cr+=0.3
+P	111307	heads	PONTIAC_V8	Ironwood Performance	Aluminum street D-port heads 2.11/1.77	1990	3400	-28	ivd=53.6	evd=45	port=1.15	cr+=0.3
+P	111401	heads	OLDS_V8	Factory	455 'C' heads 2.07/1.63	1968	700	0	ivd=52.6	evd=41.4	port=0.95
+P	111402	heads	OLDS_V8	Factory	W-30 heads 2.07/1.63	1970	1100	0	ivd=52.6	evd=41.4	port=1.02
+P	111403	heads	OLDS_V8	Factory	1972 open-chamber heads	1972	600	0	ivd=52.6	evd=41.4	port=0.95	cr+=-0.6
+P	111404	heads	OLDS_V8	Blackstone Cylinder Heads	Ported W-30 iron 2.07/1.67	1972	2000	0	ivd=52.6	evd=42.4	port=1.1
+P	111405	heads	OLDS_V8	Ironwood Performance	Aluminum Rocket race heads 2.14/1.67	1976	5200	-28	ivd=54.4	evd=42.4	port=1.25	cr+=0.3
+P	111406	heads	OLDS_V8	Ironwood Performance	Aluminum street heads 2.07/1.63	1990	3200	-28	ivd=52.6	evd=41.4	port=1.12	cr+=0.3
+P	111501	heads	AMC_V8	Factory	390 heads (small chamber)	1968	700	0	ivd=51.3	evd=42.7	port=0.92	cr+=0.4
+P	111502	heads	AMC_V8	Factory	401 heads 2.025/1.68	1970	800	0	ivd=51.4	evd=42.7	port=0.95
+P	111503	heads	AMC_V8	Blackstone Cylinder Heads	Ported iron heads 2.08/1.68	1972	1800	0	ivd=52.8	evd=42.7	port=1.08
+P	111504	heads	AMC_V8	Ironwood Performance	Aluminum race heads 2.08/1.68	1980	4800	-26	ivd=52.8	evd=42.7	port=1.2	cr+=0.3
+P	111505	heads	AMC_V8	Ironwood Performance	Aluminum street heads 2.08/1.68	1992	3200	-26	ivd=52.8	evd=42.7	port=1.12	cr+=0.3
+# ---- cam
+P	120101	cam	FORD_Y	Ridgecrest Cams	RV Torque Hydraulic 194/204 (.420/.443)	1955	380	0	idur=194	edur=204	ilift=10.39	elift=10.96	lsa=112	lifter=0
+P	120102	cam	FORD_Y	Ridgecrest Cams	Street Hydraulic 214/224 (.465/.480)	1958	420	0	idur=214	edur=224	ilift=11.5	elift=11.88	lsa=112	lifter=0
+P	120103	cam	FORD_Y	Marlow Racing Cams	Street/Strip Solid 236/242 (.520/.530)	1958	520	0	idur=236	edur=242	ilift=12.86	elift=13.11	lsa=110	lifter=1
+P	120104	cam	FORD_Y	Marlow Racing Cams	Competition Solid 256/262 (.560/.570)	1960	650	0	idur=256	edur=262	ilift=13.85	elift=14.1	lsa=106	lifter=1
+P	120105	cam	FORD_Y	Ironwood Performance	Hydraulic Roller Street 218/224 (.510/.520)	1985	1150	0	idur=218	edur=224	ilift=12.62	elift=12.86	lsa=112	lifter=2
+P	120106	cam	FORD_Y	Ironwood Performance	Solid Roller Race 264/272 (.620/.630)	1966	1450	0	idur=264	edur=272	ilift=15.34	elift=15.59	lsa=106	lifter=3
+P	120107	cam	FORD_Y	Factory	1957 competition solid	1957	400	0	idur=218	edur=218	ilift=10.64	elift=10.64	lsa=110	lifter=1
+P	120201	cam	CHEVY_SB	Ridgecrest Cams	RV Torque Hydraulic 194/204 (.420/.443)	1955	380	0	idur=194	edur=204	ilift=10.67	elift=11.25	lsa=112	lifter=0
+P	120202	cam	CHEVY_SB	Ridgecrest Cams	Street Hydraulic 214/224 (.465/.480)	1958	420	0	idur=214	edur=224	ilift=11.81	elift=12.19	lsa=112	lifter=0
+P	120203	cam	CHEVY_SB	Marlow Racing Cams	Street/Strip Solid 236/242 (.520/.530)	1958	520	0	idur=236	edur=242	ilift=13.21	elift=13.46	lsa=110	lifter=1
+P	120204	cam	CHEVY_SB	Marlow Racing Cams	Competition Solid 256/262 (.560/.570)	1960	650	0	idur=256	edur=262	ilift=14.22	elift=14.48	lsa=106	lifter=1
+P	120205	cam	CHEVY_SB	Ironwood Performance	Hydraulic Roller Street 218/224 (.510/.520)	1985	1150	0	idur=218	edur=224	ilift=12.95	elift=13.21	lsa=112	lifter=2
+P	120206	cam	CHEVY_SB	Ironwood Performance	Solid Roller Race 264/272 (.620/.630)	1966	1450	0	idur=264	edur=272	ilift=15.75	elift=16	lsa=106	lifter=3
+P	120207	cam	CHEVY_SB	Factory	Duntov solid	1957	350	0	idur=222	edur=222	ilift=10.01	elift=10.13	lsa=110	lifter=1
+P	120208	cam	CHEVY_SB	Factory	30-30 solid (Z/28 302)	1967	450	0	idur=254	edur=254	ilift=11.66	elift=11.66	lsa=114	lifter=1
+P	120209	cam	CHEVY_SB	Factory	LT-1 solid	1970	450	0	idur=242	edur=254	ilift=11.66	elift=12.32	lsa=115	lifter=1
+P	120301	cam	CHEVY_W	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1958	380	0	idur=198	edur=208	ilift=9.8	elift=10.3	lsa=112	lifter=0
+P	120302	cam	CHEVY_W	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1958	420	0	idur=218	edur=228	ilift=10.78	elift=11.1	lsa=112	lifter=0
+P	120303	cam	CHEVY_W	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1958	520	0	idur=240	edur=246	ilift=11.97	elift=12.19	lsa=110	lifter=1
+P	120304	cam	CHEVY_W	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1960	650	0	idur=260	edur=266	ilift=12.85	elift=13.06	lsa=106	lifter=1
+P	120305	cam	CHEVY_W	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=11.76	elift=11.97	lsa=112	lifter=2
+P	120306	cam	CHEVY_W	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=14.15	elift=14.37	lsa=106	lifter=3
+P	120307	cam	CHEVY_W	Factory	Z-11 solid	1963	500	0	idur=242	edur=242	ilift=11.1	elift=11.1	lsa=112	lifter=1
+P	120401	cam	CHEVY_BB	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1965	380	0	idur=198	edur=208	ilift=10.09	elift=10.6	lsa=112	lifter=0
+P	120402	cam	CHEVY_BB	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1965	420	0	idur=218	edur=228	ilift=11.09	elift=11.43	lsa=112	lifter=0
+P	120403	cam	CHEVY_BB	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1965	520	0	idur=240	edur=246	ilift=12.33	elift=12.55	lsa=110	lifter=1
+P	120404	cam	CHEVY_BB	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1965	650	0	idur=260	edur=266	ilift=13.22	elift=13.45	lsa=106	lifter=1
+P	120405	cam	CHEVY_BB	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=12.1	elift=12.33	lsa=112	lifter=2
+P	120406	cam	CHEVY_BB	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=14.57	elift=14.79	lsa=106	lifter=3
+P	120407	cam	CHEVY_BB	Factory	L88 solid	1967	550	0	idur=256	edur=264	ilift=12.55	elift=13	lsa=114	lifter=1
+P	120501	cam	CHEVY_LT	Ironwood Performance	Hydraulic Roller Street 218/224 (.510/.520)	1992	1150	0	idur=218	edur=224	ilift=12.14	elift=12.38	lsa=112	lifter=2
+P	120502	cam	CHEVY_LT	Ironwood Performance	Solid Roller Race 264/272 (.620/.630)	1992	1450	0	idur=264	edur=272	ilift=14.76	elift=15	lsa=106	lifter=3
+P	120503	cam	CHEVY_LT	Factory	LT1 hydraulic roller	1992	700	0	idur=202	edur=207	ilift=11.35	elift=11.66	lsa=117	lifter=2
+P	120504	cam	CHEVY_LT	Factory	LT4 hydraulic roller	1996	800	0	idur=218	edur=228	ilift=12.5	elift=12.5	lsa=114	lifter=2
+P	120601	cam	FORD_FE	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1958	380	0	idur=198	edur=208	ilift=9.74	elift=10.24	lsa=112	lifter=0
+P	120602	cam	FORD_FE	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1958	420	0	idur=218	edur=228	ilift=10.72	elift=11.04	lsa=112	lifter=0
+P	120603	cam	FORD_FE	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1958	520	0	idur=240	edur=246	ilift=11.91	elift=12.12	lsa=110	lifter=1
+P	120604	cam	FORD_FE	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1960	650	0	idur=260	edur=266	ilift=12.77	elift=12.99	lsa=106	lifter=1
+P	120605	cam	FORD_FE	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=11.69	elift=11.91	lsa=112	lifter=2
+P	120606	cam	FORD_FE	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=14.07	elift=14.29	lsa=106	lifter=3
+P	120607	cam	FORD_FE	Factory	428 Cobra Jet hydraulic	1968	400	0	idur=212	edur=220	ilift=10.79	elift=10.79	lsa=115	lifter=0
+P	120608	cam	FORD_FE	Factory	427 high-riser solid	1964	550	0	idur=256	edur=256	ilift=11.69	elift=11.69	lsa=110	lifter=1
+P	120701	cam	FORD_WINDSOR	Ridgecrest Cams	RV Torque Hydraulic 194/204 (.420/.443)	1962	380	0	idur=194	edur=204	ilift=10	elift=10.55	lsa=112	lifter=0
+P	120702	cam	FORD_WINDSOR	Ridgecrest Cams	Street Hydraulic 214/224 (.465/.480)	1962	420	0	idur=214	edur=224	ilift=11.07	elift=11.43	lsa=112	lifter=0
+P	120703	cam	FORD_WINDSOR	Marlow Racing Cams	Street/Strip Solid 236/242 (.520/.530)	1962	520	0	idur=236	edur=242	ilift=12.38	elift=12.62	lsa=110	lifter=1
+P	120704	cam	FORD_WINDSOR	Marlow Racing Cams	Competition Solid 256/262 (.560/.570)	1962	650	0	idur=256	edur=262	ilift=13.33	elift=13.57	lsa=106	lifter=1
+P	120705	cam	FORD_WINDSOR	Ironwood Performance	Hydraulic Roller Street 218/224 (.510/.520)	1985	1150	0	idur=218	edur=224	ilift=12.14	elift=12.38	lsa=112	lifter=2
+P	120706	cam	FORD_WINDSOR	Ironwood Performance	Solid Roller Race 264/272 (.620/.630)	1966	1450	0	idur=264	edur=272	ilift=14.76	elift=15	lsa=106	lifter=3
+P	120707	cam	FORD_WINDSOR	Factory	289 HiPo solid	1963	400	0	idur=226	edur=226	ilift=10.88	elift=10.88	lsa=115	lifter=1
+P	120708	cam	FORD_WINDSOR	Factory	5.0 HO hydraulic roller	1985	700	0	idur=196	edur=210	ilift=10.57	elift=10.57	lsa=116	lifter=2
+P	120801	cam	FORD_CLEVELAND	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1970	380	0	idur=198	edur=208	ilift=9.91	elift=10.42	lsa=112	lifter=0
+P	120802	cam	FORD_CLEVELAND	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1970	420	0	idur=218	edur=228	ilift=10.9	elift=11.23	lsa=112	lifter=0
+P	120803	cam	FORD_CLEVELAND	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1970	520	0	idur=240	edur=246	ilift=12.11	elift=12.33	lsa=110	lifter=1
+P	120804	cam	FORD_CLEVELAND	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1970	650	0	idur=260	edur=266	ilift=12.99	elift=13.21	lsa=106	lifter=1
+P	120805	cam	FORD_CLEVELAND	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=11.89	elift=12.11	lsa=112	lifter=2
+P	120806	cam	FORD_CLEVELAND	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1970	1450	0	idur=268	edur=276	ilift=14.32	elift=14.54	lsa=106	lifter=3
+P	120807	cam	FORD_CLEVELAND	Factory	Boss 351 solid	1971	450	0	idur=228	edur=228	ilift=10.81	elift=10.81	lsa=116	lifter=1
+P	120901	cam	FORD_385	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1968	380	0	idur=198	edur=208	ilift=9.91	elift=10.42	lsa=112	lifter=0
+P	120902	cam	FORD_385	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1968	420	0	idur=218	edur=228	ilift=10.9	elift=11.23	lsa=112	lifter=0
+P	120903	cam	FORD_385	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1968	520	0	idur=240	edur=246	ilift=12.11	elift=12.33	lsa=110	lifter=1
+P	120904	cam	FORD_385	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1968	650	0	idur=260	edur=266	ilift=12.99	elift=13.21	lsa=106	lifter=1
+P	120905	cam	FORD_385	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=11.89	elift=12.11	lsa=112	lifter=2
+P	120906	cam	FORD_385	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1968	1450	0	idur=268	edur=276	ilift=14.32	elift=14.54	lsa=106	lifter=3
+P	120907	cam	FORD_385	Factory	429 Cobra Jet hydraulic	1970	400	0	idur=212	edur=222	ilift=10.39	elift=10.39	lsa=115	lifter=0
+P	121001	cam	FORD_BOSS429	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1969	380	0	idur=198	edur=208	ilift=11.43	elift=12.01	lsa=112	lifter=0
+P	121002	cam	FORD_BOSS429	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1969	420	0	idur=218	edur=228	ilift=12.57	elift=12.95	lsa=112	lifter=0
+P	121003	cam	FORD_BOSS429	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1969	520	0	idur=240	edur=246	ilift=13.97	elift=14.22	lsa=110	lifter=1
+P	121004	cam	FORD_BOSS429	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1969	650	0	idur=260	edur=266	ilift=14.99	elift=15.24	lsa=106	lifter=1
+P	121005	cam	FORD_BOSS429	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=13.72	elift=13.97	lsa=112	lifter=2
+P	121006	cam	FORD_BOSS429	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1969	1450	0	idur=268	edur=276	ilift=16.51	elift=16.76	lsa=106	lifter=3
+P	121007	cam	FORD_BOSS429	Factory	Boss 429 hydraulic	1969	450	0	idur=214	edur=214	ilift=12.45	elift=12.45	lsa=114	lifter=0
+P	121101	cam	MOPAR_B_RB	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1958	380	0	idur=198	edur=208	ilift=11.43	elift=12.01	lsa=112	lifter=0
+P	121102	cam	MOPAR_B_RB	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1958	420	0	idur=218	edur=228	ilift=12.57	elift=12.95	lsa=112	lifter=0
+P	121103	cam	MOPAR_B_RB	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1958	520	0	idur=240	edur=246	ilift=13.97	elift=14.22	lsa=110	lifter=1
+P	121104	cam	MOPAR_B_RB	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1960	650	0	idur=260	edur=266	ilift=14.99	elift=15.24	lsa=106	lifter=1
+P	121105	cam	MOPAR_B_RB	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=13.72	elift=13.97	lsa=112	lifter=2
+P	121106	cam	MOPAR_B_RB	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=16.51	elift=16.76	lsa=106	lifter=3
+P	121107	cam	MOPAR_B_RB	Factory	Max Wedge solid	1962	500	0	idur=240	edur=240	ilift=13.21	elift=13.21	lsa=108	lifter=1
+P	121108	cam	MOPAR_B_RB	Factory	440 Six Pack hydraulic	1969	400	0	idur=214	edur=222	ilift=11.96	elift=12.22	lsa=112	lifter=0
+P	121201	cam	MOPAR_HEMI	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1964	380	0	idur=198	edur=208	ilift=11.43	elift=12.01	lsa=112	lifter=0
+P	121202	cam	MOPAR_HEMI	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1964	420	0	idur=218	edur=228	ilift=12.57	elift=12.95	lsa=112	lifter=0
+P	121203	cam	MOPAR_HEMI	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1964	520	0	idur=240	edur=246	ilift=13.97	elift=14.22	lsa=110	lifter=1
+P	121204	cam	MOPAR_HEMI	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1964	650	0	idur=260	edur=266	ilift=14.99	elift=15.24	lsa=106	lifter=1
+P	121205	cam	MOPAR_HEMI	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=13.72	elift=13.97	lsa=112	lifter=2
+P	121206	cam	MOPAR_HEMI	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=16.51	elift=16.76	lsa=106	lifter=3
+P	121207	cam	MOPAR_HEMI	Factory	426 street solid	1966	500	0	idur=236	edur=236	ilift=12.19	elift=12.19	lsa=112	lifter=1
+P	121208	cam	MOPAR_HEMI	Factory	426 race solid	1964	600	0	idur=260	edur=260	ilift=13.21	elift=13.21	lsa=110	lifter=1
+P	121301	cam	PONTIAC_V8	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1955	380	0	idur=198	edur=208	ilift=11.43	elift=12.01	lsa=112	lifter=0
+P	121302	cam	PONTIAC_V8	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1958	420	0	idur=218	edur=228	ilift=12.57	elift=12.95	lsa=112	lifter=0
+P	121303	cam	PONTIAC_V8	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1958	520	0	idur=240	edur=246	ilift=13.97	elift=14.22	lsa=110	lifter=1
+P	121304	cam	PONTIAC_V8	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1960	650	0	idur=260	edur=266	ilift=14.99	elift=15.24	lsa=106	lifter=1
+P	121305	cam	PONTIAC_V8	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=13.72	elift=13.97	lsa=112	lifter=2
+P	121306	cam	PONTIAC_V8	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=16.51	elift=16.76	lsa=106	lifter=3
+P	121307	cam	PONTIAC_V8	Factory	Ram Air IV hydraulic	1969	450	0	idur=228	edur=236	ilift=11.94	elift=11.94	lsa=113	lifter=0
+P	121401	cam	OLDS_V8	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1955	380	0	idur=198	edur=208	ilift=10.72	elift=11.26	lsa=112	lifter=0
+P	121402	cam	OLDS_V8	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1958	420	0	idur=218	edur=228	ilift=11.79	elift=12.14	lsa=112	lifter=0
+P	121403	cam	OLDS_V8	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1958	520	0	idur=240	edur=246	ilift=13.1	elift=13.33	lsa=110	lifter=1
+P	121404	cam	OLDS_V8	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1960	650	0	idur=260	edur=266	ilift=14.05	elift=14.29	lsa=106	lifter=1
+P	121405	cam	OLDS_V8	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=12.86	elift=13.1	lsa=112	lifter=2
+P	121406	cam	OLDS_V8	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=15.48	elift=15.72	lsa=106	lifter=3
+P	121407	cam	OLDS_V8	Factory	W-30 hydraulic	1970	400	0	idur=218	edur=228	ilift=11.29	elift=11.29	lsa=114	lifter=0
+P	121501	cam	AMC_V8	Ridgecrest Cams	RV Torque Hydraulic 198/208 (.450/.473)	1966	380	0	idur=198	edur=208	ilift=10.72	elift=11.26	lsa=112	lifter=0
+P	121502	cam	AMC_V8	Ridgecrest Cams	Street Hydraulic 218/228 (.495/.510)	1966	420	0	idur=218	edur=228	ilift=11.79	elift=12.14	lsa=112	lifter=0
+P	121503	cam	AMC_V8	Marlow Racing Cams	Street/Strip Solid 240/246 (.550/.560)	1966	520	0	idur=240	edur=246	ilift=13.1	elift=13.33	lsa=110	lifter=1
+P	121504	cam	AMC_V8	Marlow Racing Cams	Competition Solid 260/266 (.590/.600)	1966	650	0	idur=260	edur=266	ilift=14.05	elift=14.29	lsa=106	lifter=1
+P	121505	cam	AMC_V8	Ironwood Performance	Hydraulic Roller Street 222/228 (.540/.550)	1985	1150	0	idur=222	edur=228	ilift=12.86	elift=13.1	lsa=112	lifter=2
+P	121506	cam	AMC_V8	Ironwood Performance	Solid Roller Race 268/276 (.650/.660)	1966	1450	0	idur=268	edur=276	ilift=15.48	elift=15.72	lsa=106	lifter=3
+P	121507	cam	AMC_V8	Factory	'Machine' hydraulic	1970	400	0	idur=212	edur=220	ilift=11.36	elift=11.36	lsa=112	lifter=0
+# ---- valvetrain
+P	130001	valvetrain	*	Factory	Stock replacement springs	1955	60	0	float=5600
+P	130002	valvetrain	*	Brandt Valvetrain	Heavy-duty single springs + dampers	1955	120	0	float=6200
+P	130003	valvetrain	*	Brandt Valvetrain	Dual springs, chromoly retainers	1960	220	0	float=6800
+P	130004	valvetrain	*	Brandt Valvetrain	High-rpm dual springs, titanium retainers	1970	420	0	float=7600
+P	130005	valvetrain	*	Brandt Valvetrain	Race dual springs (solid roller), titanium retainers	1976	560	0	float=8400
+P	130006	valvetrain	*	Brandt Valvetrain	Beehive springs (hydraulic roller)	1994	380	0	float=7000
+P	130101	valvetrain	FORD_Y	Brandt Valvetrain	1.6 shaft roller rockers + dual springs	1975	650	0	rocker=1.6	float=6600
+P	130201	valvetrain	CHEVY_SB	Brandt Valvetrain	1.52 full roller rockers + stud girdle	1972	520	0	rocker=1.52	float=7600
+P	130202	valvetrain	CHEVY_SB	Brandt Valvetrain	1.6 roller rockers + dual springs	1975	480	0	rocker=1.6	float=7000
+P	130301	valvetrain	CHEVY_W	Brandt Valvetrain	1.75 roller rockers + race springs	1975	700	0	rocker=1.75	float=7200
+P	130401	valvetrain	CHEVY_BB	Brandt Valvetrain	1.8 roller rockers + dual springs	1975	560	0	rocker=1.8	float=6800
+P	130501	valvetrain	CHEVY_LT	Brandt Valvetrain	1.7 roller rockers + dual springs	1994	600	0	rocker=1.7	float=6900
+P	130601	valvetrain	FORD_FE	Brandt Valvetrain	1.76 roller shaft rockers + race springs	1970	750	0	rocker=1.76	float=7300
+P	130701	valvetrain	FORD_WINDSOR	Brandt Valvetrain	1.7 roller rockers + dual springs	1980	520	0	rocker=1.7	float=7000
+P	130801	valvetrain	FORD_CLEVELAND	Brandt Valvetrain	1.8 roller rockers + dual springs	1978	560	0	rocker=1.8	float=7000
+P	130901	valvetrain	FORD_385	Brandt Valvetrain	1.8 roller rockers + dual springs	1978	560	0	rocker=1.8	float=6800
+P	131001	valvetrain	FORD_BOSS429	Brandt Valvetrain	1.6 roller rockers + race springs	1975	800	0	rocker=1.6	float=7300
+P	131101	valvetrain	MOPAR_B_RB	Brandt Valvetrain	1.6 shaft roller rockers + dual springs	1975	650	0	rocker=1.6	float=6800
+P	131201	valvetrain	MOPAR_HEMI	Brandt Valvetrain	1.6 shaft roller rockers + race springs	1975	900	0	rocker=1.6	float=7300
+P	131301	valvetrain	PONTIAC_V8	Brandt Valvetrain	1.65 roller rockers + dual springs	1976	520	0	rocker=1.65	float=6600
+P	131401	valvetrain	OLDS_V8	Brandt Valvetrain	1.7 roller rockers + dual springs	1976	540	0	rocker=1.7	float=6400
+P	131501	valvetrain	AMC_V8	Brandt Valvetrain	1.7 roller rockers + dual springs	1978	540	0	rocker=1.7	float=6500
+# ---- pistons
+P	140001	pistons	*	Factory	Cast replacement pistons, .030 over	1955	260	0	bore+=0.76	cr+=0.1
+P	140002	pistons	*	Sterling Piston Co.	Forged flat-top pistons, .030 over	1958	520	-0.5	bore+=0.76	cr+=0.8
+P	140003	pistons	*	Sterling Piston Co.	Forged high-dome race pistons, .030 over	1960	720	0.4	bore+=0.76	cr+=2
+P	140004	pistons	*	Sterling Piston Co.	Forged flat-top pistons, .060 over	1962	560	-0.3	bore+=1.52	cr+=1
+P	140005	pistons	*	Sterling Piston Co.	Forged dished pistons for boost (8.0:1)	1970	560	-0.3	bore+=0.76	cr=8
+P	140006	pistons	*	Sterling Piston Co.	Lightweight forged race pistons, .030 over	1980	860	-1.2	bore+=0.76	cr+=1.5
+P	140007	pistons	*	Sterling Piston Co.	Hypereutectic flat-top pistons, .030 over	1985	380	-0.2	bore+=0.76	cr+=0.6
+# ---- rotating
+P	150101	rotating	FORD_Y	Velocity Forge	Forged crank + rods (3.44 in)	1957	3000	0	rodrpm=6500
+P	150102	rotating	FORD_Y	Velocity Forge	3.80 in stroker crank + rods	1990	5800	2	stroke=96.52	rod=152.4	rmass+=2	rodrpm=6000
+P	150103	rotating	FORD_Y	Velocity Forge	Lightweight race rotating assembly	1962	9500	-4	rmass+=-4	rodrpm=7200
+P	150201	rotating	CHEVY_SB	Factory	forged 3.00 crank + 5.7 rods (302)	1967	3200	-1	stroke=76.2	rod=144.8	rmass+=-1	rodrpm=8000
+P	150202	rotating	CHEVY_SB	Factory	forged 3.48 crank + 5.7 rods	1967	2600	0	stroke=88.39	rod=144.8	rodrpm=7000
+P	150203	rotating	CHEVY_SB	Factory	400 crank, 3.75 (cast)	1970	1600	2	stroke=95.25	rod=144.8	rmass+=3	rodrpm=6000
+P	150204	rotating	CHEVY_SB	Velocity Forge	3.75 forged stroker + 6.0 rods (383)	1985	6500	2	stroke=95.25	rod=152.4	rmass+=2	rodrpm=7000
+P	150205	rotating	CHEVY_SB	Velocity Forge	Lightweight race rotating assembly (3.48)	1975	10500	-5	stroke=88.39	rod=144.8	rmass+=-5	rodrpm=8500
+P	150301	rotating	CHEVY_W	Factory	427 Z-11 crank, 3.65	1963	4200	1	stroke=92.71	rod=155.8	rmass+=1	rodrpm=6600
+P	150302	rotating	CHEVY_W	Velocity Forge	Forged crank + rods (3.50)	1962	3400	0	rodrpm=7000
+P	150303	rotating	CHEVY_W	Velocity Forge	Lightweight race rotating assembly	1966	10000	-5	rmass+=-5	rodrpm=7600
+P	150401	rotating	CHEVY_BB	Factory	forged crank + L88 rods (stock stroke)	1967	3800	0	rodrpm=7000
+P	150402	rotating	CHEVY_BB	Factory	454 forged crank, 4.00	1970	4200	2	stroke=101.6	rod=155.8	rmass+=2	rodrpm=6500
+P	150403	rotating	CHEVY_BB	Velocity Forge	4.25 forged stroker + 6.535 rods (496)	1985	7800	3	stroke=107.95	rod=166	rmass+=3	rodrpm=6600
+P	150404	rotating	CHEVY_BB	Velocity Forge	Lightweight race rotating assembly (4.00)	1975	11500	-6	stroke=101.6	rod=155.8	rmass+=-6	rodrpm=7800
+P	150501	rotating	CHEVY_LT	Velocity Forge	Forged crank + rods (3.48)	1993	3600	0	rodrpm=7000
+P	150502	rotating	CHEVY_LT	Velocity Forge	3.75 forged stroker + 5.7 rods (383)	1995	6800	2	stroke=95.25	rod=144.8	rmass+=2	rodrpm=6800
+P	150503	rotating	CHEVY_LT	Velocity Forge	Lightweight race rotating assembly	1994	10500	-5	rmass+=-5	rodrpm=8200
+P	150601	rotating	FORD_FE	Factory	427 side-oiler crank + cross-bolt rods	1965	4200	0	stroke=96.11	rod=164.8	rodrpm=7000
+P	150602	rotating	FORD_FE	Factory	428 crank, 3.98	1966	2400	1	stroke=101.09	rod=164.8	rmass+=1	rodrpm=6000
+P	150603	rotating	FORD_FE	Velocity Forge	4.25 forged stroker + 6.7 rods	1988	7600	3	stroke=107.95	rod=170.2	rmass+=3	rodrpm=6400
+P	150604	rotating	FORD_FE	Velocity Forge	Lightweight race rotating assembly	1968	11000	-6	rmass+=-6	rodrpm=7600
+P	150701	rotating	FORD_WINDSOR	Factory	HiPo crank + rods (289)	1963	2600	0	stroke=72.9	rod=130.9	rodrpm=7200
+P	150702	rotating	FORD_WINDSOR	Factory	302 crank, 3.00	1968	1400	0	stroke=76.2	rod=129.3	rodrpm=6200
+P	150703	rotating	FORD_WINDSOR	Velocity Forge	3.25 forged stroker + 5.4 rods (331)	1985	5600	1	stroke=82.55	rod=137.2	rmass+=1	rodrpm=6800
+P	150704	rotating	FORD_WINDSOR	Velocity Forge	3.40 forged stroker + 5.4 rods (347)	1987	5800	1	stroke=86.36	rod=137.2	rmass+=1	rodrpm=6600
+P	150705	rotating	FORD_WINDSOR	Velocity Forge	Lightweight race rotating assembly	1966	9800	-4	rmass+=-4	rodrpm=8500
+P	150801	rotating	FORD_CLEVELAND	Factory	Boss 351 crank + rods	1971	3200	0	rodrpm=7000
+P	150802	rotating	FORD_CLEVELAND	Velocity Forge	3.85 forged stroker + 6.0 rods (393)	1988	6400	2	stroke=97.79	rod=152.4	rmass+=2	rodrpm=6600
+P	150803	rotating	FORD_CLEVELAND	Velocity Forge	Lightweight race rotating assembly	1974	10000	-5	rmass+=-5	rodrpm=8000
+P	150901	rotating	FORD_385	Factory	460 crank, 3.85	1968	1800	2	stroke=97.79	rod=167.8	rmass+=2	rodrpm=5800
+P	150902	rotating	FORD_385	Velocity Forge	Forged crank + rods (3.59)	1970	3800	0	rodrpm=7000
+P	150903	rotating	FORD_385	Velocity Forge	4.15 forged stroker + 6.8 rods (514)	1988	7900	3	stroke=105.41	rod=172.7	rmass+=3	rodrpm=6300
+P	151001	rotating	FORD_BOSS429	Factory	460 crank, 3.85	1969	2200	2	stroke=97.79	rod=167.8	rmass+=2	rodrpm=6200
+P	151002	rotating	FORD_BOSS429	Velocity Forge	4.15 forged stroker + 6.8 rods	1988	8400	3	stroke=105.41	rod=172.7	rmass+=3	rodrpm=6400
+P	151003	rotating	FORD_BOSS429	Velocity Forge	Lightweight race rotating assembly	1970	11500	-6	rmass+=-6	rodrpm=7800
+P	151101	rotating	MOPAR_B_RB	Velocity Forge	Forged crank + rods (stock stroke)	1962	3400	0	rodrpm=6800
+P	151102	rotating	MOPAR_B_RB	Velocity Forge	3.75 stroker crank (383 to 426)	1972	4600	2	stroke=95.25	rod=171.9	rmass+=2	rodrpm=6000
+P	151103	rotating	MOPAR_B_RB	Velocity Forge	4.15 forged stroker + 7.1 rods	1988	7800	3	stroke=105.41	rod=180.3	rmass+=3	rodrpm=6200
+P	151104	rotating	MOPAR_B_RB	Velocity Forge	Lightweight race rotating assembly	1966	10800	-6	rmass+=-6	rodrpm=7600
+P	151201	rotating	MOPAR_HEMI	Factory	race crank + rods	1964	4500	0	rodrpm=7500
+P	151202	rotating	MOPAR_HEMI	Velocity Forge	4.15 forged stroker + 7.1 rods (472)	1988	8600	3	stroke=105.41	rod=180.3	rmass+=3	rodrpm=6800
+P	151203	rotating	MOPAR_HEMI	Velocity Forge	Lightweight race rotating assembly	1970	12000	-6	rmass+=-6	rodrpm=8200
+P	151301	rotating	PONTIAC_V8	Factory	forged Ram Air IV crank + rods	1969	3000	0	rodrpm=6600
+P	151302	rotating	PONTIAC_V8	Factory	455 crank, 4.21	1970	1800	2	stroke=106.93	rod=168.3	rmass+=2	rodrpm=5600
+P	151303	rotating	PONTIAC_V8	Velocity Forge	4.25 forged stroker + 6.8 rods	1990	7400	3	stroke=107.95	rod=172.7	rmass+=3	rodrpm=6200
+P	151304	rotating	PONTIAC_V8	Velocity Forge	Lightweight race rotating assembly	1972	10500	-6	rmass+=-6	rodrpm=7200
+P	151401	rotating	OLDS_V8	Factory	forged W-30 crank + rods	1970	3000	0	rodrpm=6200
+P	151402	rotating	OLDS_V8	Velocity Forge	4.50 forged stroker + 6.8 rods	1992	7800	3	stroke=114.3	rod=172.7	rmass+=3	rodrpm=5800
+P	151403	rotating	OLDS_V8	Velocity Forge	Lightweight race rotating assembly	1975	10500	-6	rmass+=-6	rodrpm=7000
+P	151501	rotating	AMC_V8	Velocity Forge	Forged crank + rods (3.68)	1972	3000	0	rodrpm=6400
+P	151502	rotating	AMC_V8	Velocity Forge	4.00 forged stroker + 6.125 rods	1995	7200	2	stroke=101.6	rod=155.6	rmass+=2	rodrpm=6000
+P	151503	rotating	AMC_V8	Velocity Forge	Lightweight race rotating assembly	1976	9800	-5	rmass+=-5	rodrpm=7200
+# ---- intake
+P	160101	intake	FORD_Y	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	160102	intake	FORD_Y	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	160103	intake	FORD_Y	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	160104	intake	FORD_Y	Factory	dual 4-barrel manifold	1957	500	0	intake=0	port*=1.02
+P	160201	intake	CHEVY_SB	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	160202	intake	CHEVY_SB	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	160203	intake	CHEVY_SB	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	160204	intake	CHEVY_SB	Factory	aluminum cross-ram dual 4-barrel	1968	900	-8	intake=1	runner=300	port*=1.05
+P	160205	intake	CHEVY_SB	Factory	tuned-port injection (TPI)	1985	1400	0	intake=3	carb=0	cfm=650	filter=0.05
+P	160206	intake	CHEVY_SB	Delmont Fuel Systems	Large-runner TPI kit	1988	1900	-2	intake=3	carb=0	cfm=780	port*=1.04	filter=0.04
+P	160207	intake	CHEVY_SB	Delmont Fuel Systems	Short-runner EFI mini-ram	1990	2200	-4	intake=1	carb=0	cfm=900	port*=1.06	filter=0.03
+P	160301	intake	CHEVY_W	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	160302	intake	CHEVY_W	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	160303	intake	CHEVY_W	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	160304	intake	CHEVY_W	Factory	aluminum dual 4-barrel (409/425)	1962	600	-9	intake=0	port*=1.02
+P	160401	intake	CHEVY_BB	Thunder Valley Manifolds	Aluminum high-rise dual plane	1965	290	-9	intake=0	port*=1.02
+P	160402	intake	CHEVY_BB	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1965	360	-9	intake=1	port*=1.04
+P	160403	intake	CHEVY_BB	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	160404	intake	CHEVY_BB	Factory	L88 aluminum high-rise	1967	700	-10	intake=0	port*=1.04
+P	160501	intake	CHEVY_LT	Factory	LT1/LT4 EFI intake	1992	900	0	intake=3	carb=0	cfm=900
+P	160502	intake	CHEVY_LT	Delmont Fuel Systems	Ported LT4 EFI intake	1996	1400	0	intake=3	carb=0	cfm=1000	port*=1.03
+P	160503	intake	CHEVY_LT	Delmont Fuel Systems	Short-runner EFI race intake	1995	2400	-2	intake=1	carb=0	cfm=1150	port*=1.06
+P	160601	intake	FORD_FE	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	160602	intake	FORD_FE	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	160603	intake	FORD_FE	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	160604	intake	FORD_FE	Factory	medium-riser dual 4-barrel	1964	700	-9	intake=0	port*=1.03
+P	160605	intake	FORD_FE	Factory	high-riser single 4-barrel	1964	800	-9	intake=1	port*=1.05
+P	160701	intake	FORD_WINDSOR	Thunder Valley Manifolds	Aluminum high-rise dual plane	1962	290	-9	intake=0	port*=1.02
+P	160702	intake	FORD_WINDSOR	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	160703	intake	FORD_WINDSOR	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	160704	intake	FORD_WINDSOR	Factory	5.0 HO EFI intake	1986	900	0	intake=3	carb=0	cfm=650	filter=0.05
+P	160705	intake	FORD_WINDSOR	Factory	GT40 tubular EFI intake	1993	1300	-2	intake=3	carb=0	cfm=760	port*=1.03	filter=0.04
+P	160706	intake	FORD_WINDSOR	Delmont Fuel Systems	Large-plenum EFI intake	1989	1600	-3	intake=3	carb=0	cfm=850	port*=1.04	filter=0.04
+P	160801	intake	FORD_CLEVELAND	Thunder Valley Manifolds	Aluminum high-rise dual plane	1970	290	-9	intake=0	port*=1.02
+P	160802	intake	FORD_CLEVELAND	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1970	360	-9	intake=1	port*=1.04
+P	160803	intake	FORD_CLEVELAND	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1970	650	-4	intake=2	port*=1.06
+P	160804	intake	FORD_CLEVELAND	Factory	Boss 351 aluminum high-rise	1971	600	-9	intake=0	port*=1.03
+P	160901	intake	FORD_385	Thunder Valley Manifolds	Aluminum high-rise dual plane	1968	290	-9	intake=0	port*=1.02
+P	160902	intake	FORD_385	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1968	360	-9	intake=1	port*=1.04
+P	160903	intake	FORD_385	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1968	650	-4	intake=2	port*=1.06
+P	160904	intake	FORD_385	Factory	Super Cobra Jet aluminum	1971	600	-10	intake=0	port*=1.02
+P	161001	intake	FORD_BOSS429	Thunder Valley Manifolds	Aluminum high-rise dual plane	1969	290	-9	intake=0	port*=1.02
+P	161002	intake	FORD_BOSS429	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1969	360	-9	intake=1	port*=1.04
+P	161003	intake	FORD_BOSS429	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1969	650	-4	intake=2	port*=1.06
+P	161004	intake	FORD_BOSS429	Factory	Boss 429 aluminum (stock replacement)	1969	600	0	intake=0
+P	161101	intake	MOPAR_B_RB	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	161102	intake	MOPAR_B_RB	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	161103	intake	MOPAR_B_RB	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	161104	intake	MOPAR_B_RB	Factory	Six Pack aluminum (3x2-barrel)	1969	700	-9	intake=0	port*=1.02
+P	161105	intake	MOPAR_B_RB	Factory	Max Wedge cross-ram	1962	900	0	intake=1	runner=380	port*=1.05
+P	161201	intake	MOPAR_HEMI	Thunder Valley Manifolds	Aluminum high-rise dual plane	1964	290	-9	intake=0	port*=1.02
+P	161202	intake	MOPAR_HEMI	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	161203	intake	MOPAR_HEMI	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	161204	intake	MOPAR_HEMI	Factory	race cross-ram dual 4-barrel	1964	1200	-6	intake=1	runner=380	port*=1.05
+P	161301	intake	PONTIAC_V8	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	161302	intake	PONTIAC_V8	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	161303	intake	PONTIAC_V8	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	161304	intake	PONTIAC_V8	Factory	Ram Air IV aluminum	1969	600	-10	intake=0	port*=1.03
+P	161401	intake	OLDS_V8	Thunder Valley Manifolds	Aluminum high-rise dual plane	1958	290	-9	intake=0	port*=1.02
+P	161402	intake	OLDS_V8	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1964	360	-9	intake=1	port*=1.04
+P	161403	intake	OLDS_V8	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	161404	intake	OLDS_V8	Factory	W-30 aluminum	1970	600	-10	intake=0	port*=1.02
+P	161501	intake	AMC_V8	Thunder Valley Manifolds	Aluminum high-rise dual plane	1966	290	-9	intake=0	port*=1.02
+P	161502	intake	AMC_V8	Thunder Valley Manifolds	Aluminum single plane, 4-barrel	1966	360	-9	intake=1	port*=1.04
+P	161503	intake	AMC_V8	Thunder Valley Manifolds	Tunnel ram, 2x4-barrel	1966	650	-4	intake=2	port*=1.06
+P	161504	intake	AMC_V8	Factory	'Machine' aluminum high-rise	1970	550	-9	intake=0	port*=1.02
+# ---- carb
+P	170001	carb	*	Factory	2-barrel, 350 cfm	1955	120	0	carb=1	cfm=350	filter=0.08
+P	170002	carb	*	Kessler Induction	4-barrel, 450 cfm	1957	220	0	carb=1	cfm=450	filter=0.03
+P	170003	carb	*	Kessler Induction	4-barrel vacuum secondary, 600 cfm	1962	280	0	carb=1	cfm=600	filter=0.03
+P	170004	carb	*	Kessler Induction	4-barrel double pumper, 650 cfm	1965	330	0	carb=1	cfm=650	filter=0.03
+P	170005	carb	*	Kessler Induction	4-barrel vacuum secondary, 750 cfm	1966	340	0	carb=1	cfm=750	filter=0.03
+P	170006	carb	*	Kessler Induction	4-barrel double pumper, 780 cfm	1967	380	0	carb=1	cfm=780	filter=0.03
+P	170007	carb	*	Factory	spread-bore 4-barrel, 800 cfm	1967	260	0	carb=1	cfm=800	filter=0.05
+P	170008	carb	*	Kessler Induction	4-barrel double pumper, 850 cfm	1969	420	0	carb=1	cfm=850	filter=0.02
+P	170009	carb	*	Kessler Induction	Triple 2-barrel, 1000 cfm	1958	520	0	carb=1	cfm=1000	filter=0.03
+P	170010	carb	*	Kessler Induction	Race 4-barrel, big flange, 1050 cfm	1970	700	0	carb=1	cfm=1050	filter=0.01
+P	170011	carb	*	Kessler Induction	Dual 4-barrel, 2x 600 cfm	1962	640	0	carb=1	cfm=1200	filter=0.02
+P	170012	carb	*	Kessler Induction	Dual 4-barrel, 2x 750 cfm	1966	780	0	carb=1	cfm=1500	filter=0.01
+P	170013	carb	*	Kessler Induction	Street 4-barrel with electric choke, 950 cfm	1980	520	0	carb=1	cfm=950	filter=0.03
+P	170201	carb	CHEVY_SB	Delmont Fuel Systems	Twin 52 mm throttle body + 85 mm MAF (TPI)	1987	650	0	carb=0	cfm=780
+P	170501	carb	CHEVY_LT	Delmont Fuel Systems	58 mm throttle body + 85 mm MAF	1994	700	0	carb=0	cfm=1050
+P	170701	carb	FORD_WINDSOR	Factory	60 mm throttle body (5.0 HO)	1986	300	0	carb=0	cfm=650
+P	170702	carb	FORD_WINDSOR	Delmont Fuel Systems	70 mm throttle body + 77 mm MAF	1990	700	0	carb=0	cfm=850
+# ---- headers
+P	180101	headers	FORD_Y	Factory	high-performance cast manifolds	1955	300	0	header=1
+P	180102	headers	FORD_Y	Arrowhead Headers	Long-tube street headers, 1-5/8 in	1958	620	-9	header=3	pdia=41.3	plen=760
+P	180103	headers	FORD_Y	Arrowhead Headers	Long-tube race headers, 1-3/4 in	1962	940	-11	header=3	pdia=44.4	plen=860
+P	180104	headers	FORD_Y	Arrowhead Headers	Shorty headers, 1-1/2 in	1972	420	-6	header=2	pdia=38.1	plen=380
+P	180105	headers	FORD_Y	Arrowhead Headers	Tri-Y headers, 1-5/8 in	1962	720	-8	header=4	pdia=41.3	plen=800
+P	180201	headers	CHEVY_SB	Factory	high-performance cast manifolds	1955	300	0	header=1
+P	180202	headers	CHEVY_SB	Arrowhead Headers	Long-tube street headers, 1-5/8 in	1958	620	-9	header=3	pdia=41.3	plen=760
+P	180203	headers	CHEVY_SB	Arrowhead Headers	Long-tube race headers, 1-3/4 in	1962	940	-11	header=3	pdia=44.4	plen=860
+P	180204	headers	CHEVY_SB	Arrowhead Headers	Shorty headers, 1-1/2 in	1972	420	-6	header=2	pdia=38.1	plen=380
+P	180205	headers	CHEVY_SB	Arrowhead Headers	Tri-Y headers, 1-5/8 in	1962	720	-8	header=4	pdia=41.3	plen=800
+P	180206	headers	CHEVY_SB	Arrowhead Headers	Stainless long-tube headers, 1-5/8 in (smog-legal)	1988	1100	-10	header=3	pdia=41.3	plen=760
+P	180301	headers	CHEVY_W	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1958	620	-9	header=3	pdia=47.6	plen=760
+P	180302	headers	CHEVY_W	Arrowhead Headers	Long-tube race headers, 2 in	1962	940	-11	header=3	pdia=50.8	plen=860
+P	180303	headers	CHEVY_W	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+P	180401	headers	CHEVY_BB	Arrowhead Headers	Long-tube street headers, 2 in	1965	620	-9	header=3	pdia=50.8	plen=760
+P	180402	headers	CHEVY_BB	Arrowhead Headers	Long-tube race headers, 2-1/8 in	1965	940	-11	header=3	pdia=54	plen=860
+P	180403	headers	CHEVY_BB	Arrowhead Headers	Shorty headers, 1-7/8 in	1972	420	-6	header=2	pdia=47.6	plen=380
+P	180501	headers	CHEVY_LT	Arrowhead Headers	Long-tube street headers, 1-5/8 in	1992	620	-9	header=3	pdia=41.3	plen=760
+P	180502	headers	CHEVY_LT	Arrowhead Headers	Long-tube race headers, 1-3/4 in	1992	940	-11	header=3	pdia=44.4	plen=860
+P	180503	headers	CHEVY_LT	Arrowhead Headers	Shorty headers, 1-1/2 in	1992	420	-6	header=2	pdia=38.1	plen=380
+P	180504	headers	CHEVY_LT	Arrowhead Headers	Tri-Y headers, 1-5/8 in	1992	720	-8	header=4	pdia=41.3	plen=800
+P	180505	headers	CHEVY_LT	Arrowhead Headers	Stainless long-tube headers, 1-5/8 in (smog-legal)	1992	1100	-10	header=3	pdia=41.3	plen=760
+P	180601	headers	FORD_FE	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1958	620	-9	header=3	pdia=47.6	plen=760
+P	180602	headers	FORD_FE	Arrowhead Headers	Long-tube race headers, 2 in	1962	940	-11	header=3	pdia=50.8	plen=860
+P	180603	headers	FORD_FE	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+P	180701	headers	FORD_WINDSOR	Factory	high-performance cast manifolds	1962	300	0	header=1
+P	180702	headers	FORD_WINDSOR	Arrowhead Headers	Long-tube street headers, 1-5/8 in	1962	620	-9	header=3	pdia=41.3	plen=760
+P	180703	headers	FORD_WINDSOR	Arrowhead Headers	Long-tube race headers, 1-3/4 in	1962	940	-11	header=3	pdia=44.4	plen=860
+P	180704	headers	FORD_WINDSOR	Arrowhead Headers	Shorty headers, 1-1/2 in	1972	420	-6	header=2	pdia=38.1	plen=380
+P	180705	headers	FORD_WINDSOR	Arrowhead Headers	Tri-Y headers, 1-5/8 in	1962	720	-8	header=4	pdia=41.3	plen=800
+P	180706	headers	FORD_WINDSOR	Arrowhead Headers	Stainless long-tube headers, 1-5/8 in (smog-legal)	1988	1100	-10	header=3	pdia=41.3	plen=760
+P	180801	headers	FORD_CLEVELAND	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1970	620	-9	header=3	pdia=47.6	plen=760
+P	180802	headers	FORD_CLEVELAND	Arrowhead Headers	Long-tube race headers, 2 in	1970	940	-11	header=3	pdia=50.8	plen=860
+P	180803	headers	FORD_CLEVELAND	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+P	180901	headers	FORD_385	Arrowhead Headers	Long-tube street headers, 2 in	1968	620	-9	header=3	pdia=50.8	plen=760
+P	180902	headers	FORD_385	Arrowhead Headers	Long-tube race headers, 2-1/8 in	1968	940	-11	header=3	pdia=54	plen=860
+P	180903	headers	FORD_385	Arrowhead Headers	Shorty headers, 1-7/8 in	1972	420	-6	header=2	pdia=47.6	plen=380
+P	181001	headers	FORD_BOSS429	Arrowhead Headers	Long-tube street headers, 2 in	1969	620	-9	header=3	pdia=50.8	plen=760
+P	181002	headers	FORD_BOSS429	Arrowhead Headers	Long-tube race headers, 2-1/8 in	1969	940	-11	header=3	pdia=54	plen=860
+P	181003	headers	FORD_BOSS429	Arrowhead Headers	Shorty headers, 1-7/8 in	1972	420	-6	header=2	pdia=47.6	plen=380
+P	181101	headers	MOPAR_B_RB	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1958	620	-9	header=3	pdia=47.6	plen=760
+P	181102	headers	MOPAR_B_RB	Arrowhead Headers	Long-tube race headers, 2 in	1962	940	-11	header=3	pdia=50.8	plen=860
+P	181103	headers	MOPAR_B_RB	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+P	181201	headers	MOPAR_HEMI	Arrowhead Headers	Long-tube street headers, 2 in	1964	620	-9	header=3	pdia=50.8	plen=760
+P	181202	headers	MOPAR_HEMI	Arrowhead Headers	Long-tube race headers, 2-1/8 in	1964	940	-11	header=3	pdia=54	plen=860
+P	181203	headers	MOPAR_HEMI	Arrowhead Headers	Shorty headers, 1-7/8 in	1972	420	-6	header=2	pdia=47.6	plen=380
+P	181301	headers	PONTIAC_V8	Factory	high-performance cast manifolds	1955	300	0	header=1
+P	181302	headers	PONTIAC_V8	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1958	620	-9	header=3	pdia=47.6	plen=760
+P	181303	headers	PONTIAC_V8	Arrowhead Headers	Long-tube race headers, 2 in	1962	940	-11	header=3	pdia=50.8	plen=860
+P	181304	headers	PONTIAC_V8	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+P	181401	headers	OLDS_V8	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1958	620	-9	header=3	pdia=47.6	plen=760
+P	181402	headers	OLDS_V8	Arrowhead Headers	Long-tube race headers, 2 in	1962	940	-11	header=3	pdia=50.8	plen=860
+P	181403	headers	OLDS_V8	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+P	181501	headers	AMC_V8	Factory	high-performance cast manifolds	1966	300	0	header=1
+P	181502	headers	AMC_V8	Arrowhead Headers	Long-tube street headers, 1-7/8 in	1966	620	-9	header=3	pdia=47.6	plen=760
+P	181503	headers	AMC_V8	Arrowhead Headers	Long-tube race headers, 2 in	1966	940	-11	header=3	pdia=50.8	plen=860
+P	181504	headers	AMC_V8	Arrowhead Headers	Shorty headers, 1-3/4 in	1972	420	-6	header=2	pdia=44.4	plen=380
+# ---- exhaust
+P	190001	exhaust	*	Factory	single 2-1/4 in, reverse-flow muffler	1955	150	0	pipe=57.1	duals=0	muffler=0.7
+P	190002	exhaust	*	Factory	dual 2-1/4 in, turbo mufflers	1955	260	3	pipe=57.1	duals=1	muffler=0.45
+P	190003	exhaust	*	Coastline Exhaust	Dual 2-1/2 in glasspacks	1955	320	-2	pipe=63.5	duals=1	muffler=0.3
+P	190004	exhaust	*	Coastline Exhaust	Dual 2-1/2 in side pipes	1965	520	-4	pipe=63.5	duals=1	muffler=0.22
+P	190005	exhaust	*	Coastline Exhaust	Dual 2-1/2 in chambered mufflers	1966	380	0	pipe=63.5	duals=1	muffler=0.35
+P	190006	exhaust	*	Coastline Exhaust	Open dual 3 in race pipes (no mufflers)	1955	240	-10	pipe=76.2	duals=1	muffler=0
+P	190007	exhaust	*	Coastline Exhaust	Dual 3 in race chambered	1970	540	-2	pipe=76.2	duals=1	muffler=0.22
+P	190008	exhaust	*	Factory	dual 2-1/2 in with catalytic converters	1975	450	4	pipe=63.5	duals=1	muffler=0.55
+P	190009	exhaust	*	Coastline Exhaust	Dual 3 in straight-through, H-pipe	1985	620	-3	pipe=76.2	duals=1	muffler=0.25
+P	190010	exhaust	*	Coastline Exhaust	Stainless dual 2-1/2 in, X-pipe	1990	780	-5	pipe=63.5	duals=1	muffler=0.32
+# ---- ignition
+P	200001	ignition	*	Factory	Points distributor, tune-up kit	1955	60	0	ign=0
+P	200002	ignition	*	Pulsar Ignition	Race magneto	1955	650	0	ign=2
+P	200003	ignition	*	Factory	transistorized ignition	1964	320	0	ign=1
+P	200004	ignition	*	Pulsar Ignition	Capacitive discharge ignition box	1970	380	0	ign=2
+P	200005	ignition	*	Pulsar Ignition	Magnetic-trigger electronic conversion	1972	240	0	ign=1
+P	200006	ignition	*	Factory	large-cap electronic distributor	1974	220	0	ign=1
+P	200007	ignition	*	Pulsar Ignition	Multi-spark CD ignition + high-output coil	1984	460	0	ign=2
