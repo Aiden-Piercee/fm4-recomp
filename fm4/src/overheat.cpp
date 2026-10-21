@@ -95,6 +95,10 @@ void PartTuneRegister();
 float PartTuneTorqueMult(uint32_t car_phys, float rpm);
 void PartTuneSetPlayerCar(uint32_t car_phys);
 void PartTuneForgetCar(uint32_t car_phys);
+// engine_build/engine_builder.cpp: parts-based engine builds (docs/ENGINE_BUILDER.md).
+void EngineBuilderSetPlayerCar(uint32_t car_phys);
+float EngineBuilderTorqueRatio(uint32_t car_phys, float rpm);
+float EngineBuilderLimiter(uint32_t car_phys, float current_rad_s);
 
 namespace {
 
@@ -480,7 +484,7 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
   static const bool tune_registered = (PartTuneRegister(), true);
   (void)tune_registered;
   if (fresh_car) {
-    if (Ld8(e + kFlagB) == 0) PartTuneSetPlayerCar(e);  // same player guess as the HUD
+    if (Ld8(e + kFlagB) == 0) { PartTuneSetPlayerCar(e); EngineBuilderSetPlayerCar(e); }  // same player guess as the HUD
     s = EngineState{};
     s.force_gen = g_force_gen.load();
     s.fault_gen = g_fault_gen.load();
@@ -703,9 +707,12 @@ void OverheatEngineStep(PPCRegister& r31, PPCRegister& f31) {
   if (running) {
     const float cur = LdF(e + kMult);
     const float base = (s.tuned_mult > 0.0f && cur == s.tuned_mult) ? s.base_mult : cur;
-    const float tuned = base * PartTuneTorqueMult(e, omega * 9.5493f);
+    const float tuned = base * PartTuneTorqueMult(e, omega * 9.5493f) * EngineBuilderTorqueRatio(e, omega * 9.5493f);
     if (tuned > 0.0f && tuned == tuned) { StF(e + kMult, tuned); s.base_mult = base; s.tuned_mult = LdF(e + kMult); }
   }
+
+  // Engine builder: a build that revs further moves the rev limiter up (0 = leave it).
+  if (const float lim = EngineBuilderLimiter(e, limiter); lim > 0.0f) StF(e + kLimiter, lim);
 
   const float dd = Model(s, omega, limiter, throttle, s.speed, dt);
   if (s.damaging && dd > 0.0f) WriteDamage(e, s, LdF(e + kDamage) + dd);

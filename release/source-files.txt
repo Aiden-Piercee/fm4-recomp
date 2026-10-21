@@ -13,7 +13,9 @@ README.md
 Split FM4 Registrar.ps1
 THIRD_PARTY_NOTICES.md
 assets/fm4-recompiled-hero.png
+assets/engine_builder/fm4_engine_parts.tsv
 docs/CONTRIBUTIONS.md
+docs/ENGINE_BUILDER.md
 docs/LEGAL.md
 docs/PERFORMANCE.md
 docs/NATIVE_RENDERER.md
@@ -39,6 +41,13 @@ fm4/src/overheat.cpp
 fm4/src/mods_menu.cpp
 fm4/src/garage_menu.cpp
 fm4/src/part_tune.cpp
+fm4/src/engine_build/dyno.h
+fm4/src/engine_build/dyno.cpp
+fm4/src/engine_build/catalogue.h
+fm4/src/engine_build/catalogue.cpp
+fm4/src/engine_build/engine_builder.h
+fm4/src/engine_build/engine_builder.cpp
+fm4/src/engine_build/builder_ui.cpp
 fm4/src/used_lot.cpp
 fm4/src/used_lot_names.cpp
 fm4/src/used_lot_names.inc

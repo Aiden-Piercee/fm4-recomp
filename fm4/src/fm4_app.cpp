@@ -299,6 +299,10 @@ std::unique_ptr<rex::ui::ImGuiDialog> CreateStaggerHud(rex::ui::ImGuiDrawer* dra
 std::unique_ptr<rex::ui::ImGuiDialog> CreateRimPicker(rex::ui::ImGuiDrawer* drawer,
                                                       const std::filesystem::path& user_root);
 
+// Engine builder overlay, F7 (engine_build/builder_ui.cpp).
+std::unique_ptr<rex::ui::ImGuiDialog> CreateEngineBuilder(rex::ui::ImGuiDrawer* drawer,
+                                                          const std::filesystem::path& user_root);
+
 void Fm4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   stagger_hud_ = CreateStaggerHud(drawer);
   if (runtime()) rim_picker_ = CreateRimPicker(drawer, runtime()->user_data_root());
@@ -306,4 +310,5 @@ void Fm4App::OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) {
   evo_hud_ = CreateEvolutionHud(drawer);
   evo_intro_ = CreateEvolutionIntro(drawer);
   if (runtime()) mods_overlay_ = CreateModsOverlay(drawer, runtime()->user_data_root());
+  if (runtime()) engine_builder_ = CreateEngineBuilder(drawer, runtime()->user_data_root());
 }

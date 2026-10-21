@@ -28,7 +28,7 @@ public:
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
-  void OnShutdown() override { overheat_hud_.reset(); evo_hud_.reset(); evo_intro_.reset(); mods_overlay_.reset(); stagger_hud_.reset(); rim_picker_.reset(); }  // before the ImGui drawer goes
+  void OnShutdown() override { overheat_hud_.reset(); evo_hud_.reset(); evo_intro_.reset(); mods_overlay_.reset(); stagger_hud_.reset(); rim_picker_.reset(); engine_builder_.reset(); }  // before the ImGui drawer goes
   // void OnConfigurePaths(rex::PathConfig& paths) override {}
 
 private:
@@ -44,4 +44,6 @@ private:
   std::unique_ptr<rex::ui::ImGuiDialog> stagger_hud_;
   // Rim Style picker in the upgrade shop (rim_picker.cpp).
   std::unique_ptr<rex::ui::ImGuiDialog> rim_picker_;
+  // Engine builder overlay, F7 (engine_build/builder_ui.cpp).
+  std::unique_ptr<rex::ui::ImGuiDialog> engine_builder_;
 };

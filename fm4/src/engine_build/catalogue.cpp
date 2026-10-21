@@ -1,5 +1,5 @@
 // Engine builder: parts catalogue parser. See catalogue.h.
-#include "engine_build/catalogue.h"
+#include "catalogue.h"
 
 #include <algorithm>
 #include <cstdlib>

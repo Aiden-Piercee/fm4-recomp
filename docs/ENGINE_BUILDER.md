@@ -84,6 +84,6 @@ Keys: `bore stroke cyl rod cr rmass rodrpm vpc ivd evd port portcc idur edur ili
 
 ## Testing
 
-* Host: `tools/engine_build/dyno_test.cpp` (any C++17 compiler: `c++ -std=c++17 -O2 -I fm4/src tools/engine_build/dyno_test.cpp fm4/src/engine_build/dyno.cpp fm4/src/engine_build/catalogue.cpp -o dyno_test`). Checks smoothness, the direction of each part's effect and catalogue parsing.
+* Host: `tools/engine_build/dyno_test.cpp` (any C++17 compiler: `c++ -std=c++17 -O2 -I fm4/src/engine_build tools/engine_build/dyno_test.cpp fm4/src/engine_build/dyno.cpp fm4/src/engine_build/catalogue.cpp -o dyno_test`). Checks smoothness, the direction of each part's effect and catalogue parsing.
 * Calibration against FM4: `tools/engine_build/dyno_check.py <gamedb.slt>` runs the model over every `E` row and prints peak torque rpm and curve shape against the car's stock FM4 curve. It reads the user's own game database and writes nothing.
 * In game: pick a pilot car (1969 Camaro Z28, 1970 Chevelle SS, 1969 Charger R/T), F7, fit a big cam and single-plane intake, take it to Test Drive. `fm4.log` lines start with `Engine builder:`.

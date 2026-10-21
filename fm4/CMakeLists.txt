@@ -21,6 +21,10 @@ set(FM4_SOURCES
     src/mods_menu.cpp
     src/garage_menu.cpp
     src/part_tune.cpp
+    src/engine_build/dyno.cpp
+    src/engine_build/catalogue.cpp
+    src/engine_build/engine_builder.cpp
+    src/engine_build/builder_ui.cpp
     src/used_lot.cpp
     src/used_lot_names.cpp
     src/shop_filter.cpp

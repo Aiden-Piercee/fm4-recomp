@@ -132,8 +132,10 @@ bool Provider(uint32_t car_phys, float& cooling_tier, float& wear) {
 void PartTuneSetQuery(PartTuneQueryFn fn) { g_query.store(fn); }
 void PartTuneSetPlayerCar(uint32_t car_phys) { g_player_car = car_phys; }
 // The caller (the code that knows Main/CareerCar) supplies the garage id and the profile table prefix.
+void EngineBuilderSetGarage(int garage_id);  // engine_build/engine_builder.cpp
 void PartTuneSetPlayerGarage(int garage_id, const char* profile_prefix) {
   g_garage_id = garage_id;
+  EngineBuilderSetGarage(garage_id);
   std::snprintf(g_profile_prefix, sizeof g_profile_prefix, "%s", profile_prefix ? profile_prefix : "");
 }
 void PartTuneRegister() { EngineReliabilitySetProvider(&Provider); }

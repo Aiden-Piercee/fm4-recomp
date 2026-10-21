@@ -4,7 +4,7 @@
 // ---------------------------------------------------------------------------
 #pragma once
 
-#include "engine_build/dyno.h"
+#include "dyno.h"
 
 #include <cstdint>
 #include <map>
