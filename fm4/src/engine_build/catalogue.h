@@ -13,7 +13,9 @@
 
 namespace eb {
 
-enum Slot : int { kHeads = 0, kCam, kValvetrain, kPistons, kRotating, kIntake, kCarb, kHeaders, kExhaust, kIgnitionSlot, kNumSlots };
+// New slots are only ever appended: the slot number is saved in {P}Evolution_EngineBuild.
+enum Slot : int { kHeads = 0, kCam, kValvetrain, kPistons, kRotating, kIntake, kCarb, kHeaders, kExhaust, kIgnitionSlot,
+                  kBlowerSlot, kNitrousSlot, kNumSlots };
 const char* SlotKey(int slot);    // "heads", "cam", ...
 const char* SlotName(int slot);   // "Cylinder heads", "Camshaft", ...
 int SlotFromKey(const std::string& key);  // -1 if unknown

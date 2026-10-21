@@ -29,6 +29,7 @@ struct CarState {
   double curve_max_rpm = 0.0;     // fitted camshaft TorqueCurveMaxRPM (end of the stock curve)
   double fm4_upgrade_scale = 1.0; // product of the fitted FM4 engine upgrade TorqueScales (divided out)
   bool fm4_cam_upgraded = false;  // a non-stock FM4 camshaft is fitted (its curve shape is not divided out)
+  bool fm4_fi_upgraded = false;   // a non-stock FM4 turbo / supercharger is fitted (the builder blower is ignored)
 };
 
 // What the physics hook uses: torque ratio table and the rev limit, rebuilt when the car or build changes.

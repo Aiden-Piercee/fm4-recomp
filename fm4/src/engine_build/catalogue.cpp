@@ -11,10 +11,12 @@ namespace eb {
 namespace {
 
 constexpr const char* kSlotKeys[kNumSlots] = {"heads", "cam", "valvetrain", "pistons", "rotating",
-                                              "intake", "carb", "headers", "exhaust", "ignition"};
+                                              "intake", "carb", "headers", "exhaust", "ignition",
+                                              "blower", "nitrous"};
 constexpr const char* kSlotNames[kNumSlots] = {"Cylinder heads", "Camshaft", "Valvetrain", "Pistons",
                                                "Crank and rods", "Intake manifold", "Carburettor / throttle",
-                                               "Exhaust manifolds", "Exhaust system", "Ignition"};
+                                               "Exhaust manifolds", "Exhaust system", "Ignition",
+                                               "Supercharger / turbo", "Nitrous oxide"};
 
 std::vector<std::string> SplitTabs(const std::string& line) {
   std::vector<std::string> out;
@@ -205,6 +207,13 @@ void ApplyMods(EngineSpec& s, const std::vector<Mod>& mods, int* unknown) {
     else if (k == "ign") Apply(s.ignition, m);
     else if (k == "octane") Apply(s.fuel_octane, m);
     else if (k == "tune") Apply(s.spark_tune, m);
+    else if (k == "blower") Apply(s.blower, m);
+    else if (k == "boost") Apply(s.boost_psi, m);
+    else if (k == "boostrpm") Apply(s.boost_rpm, m);
+    else if (k == "beff") Apply(s.blower_efficiency, m);
+    else if (k == "ic") Apply(s.intercooler, m);
+    else if (k == "n2o") Apply(s.nitrous_kw, m);
+    else if (k == "n2orpm") Apply(s.nitrous_rpm, m);
     else if (unknown) ++*unknown;
   }
 }

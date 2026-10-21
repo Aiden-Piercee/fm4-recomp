@@ -21,6 +21,9 @@ enum Intake : int { kDualPlane = 0, kSinglePlane = 1, kTunnelRam = 2, kLongRunne
 enum Header : int { kCastLog = 0, kCastPerformance = 1, kShortyHeader = 2, kLongTubeHeader = 3, kTriYHeader = 4 };
 // Ignition system.
 enum Ignition : int { kPoints = 0, kElectronic = 1, kCapacitiveDischarge = 2 };
+// Forced induction. Roots and twin-screw are positive displacement (boost nearly flat once spinning), centrifugal
+// boost grows with the square of rpm, a turbo makes boost from exhaust flow above its spool rpm (wastegate limited).
+enum Blower : int { kNoBlower = 0, kRoots = 1, kTwinScrew = 2, kCentrifugal = 3, kTurbo = 4 };
 
 // A fully resolved engine: the stock geometry with every fitted part applied. Units are metric; angles in crank
 // degrees. Every field has a plausible default so a partly filled spec still runs.
@@ -73,6 +76,18 @@ struct EngineSpec {
   double fuel_octane = 98.0;  // research octane of the fuel the engine is tuned for (period premium leaded ~ 100)
   double spark_tune = 1.0;    // spark and mixture calibration: 1 = best power; ~0.85 = retarded, lean, EGR smog-era
                               // tune (1975-80). A recurve / performance ignition or carb part sets it back to 1.
+
+  // Forced induction (blower slot). boost_psi is the gauge boost the unit is set up for (pulley / wastegate).
+  int blower = kNoBlower;
+  double boost_psi = 0.0;
+  double boost_rpm = 0.0;           // centrifugal: rpm where boost_psi is reached; turbo: full-boost (spool) rpm;
+                                    // Roots / screw: 0 = boost flat from low rpm
+  double blower_efficiency = 0.0;   // adiabatic efficiency; 0 = typical for the type
+  double intercooler = 0.0;         // intercooler effectiveness 0 (none) .. ~0.8
+
+  // Nitrous oxide (nitrous slot): a wet kit adding about nitrous_kw at the crank, armed above nitrous_rpm at WOT.
+  double nitrous_kw = 0.0;
+  double nitrous_rpm = 3000.0;
 };
 
 // Result: torque along evenly spaced rpm points from 0 to rpm_max, plus summary numbers.
@@ -85,7 +100,10 @@ struct DynoResult {
   double valve_float_rpm = 0.0;    // where valve control is lost (torque falls off hard above)
   double safe_rpm = 0.0;           // min(valve float, rod limit): a sensible rev limit for this build
   double idle_rpm = 0.0;           // rough idle speed implied by the cam (overlap)
-  double knock_margin = 0.0;       // < 0 means the compression is too high for the fuel (torque is reduced)
+  double knock_margin = 0.0;       // < 0 means the compression is too high for the fuel (torque is reduced); with a
+                                   // blower or nitrous this is the worst point in the rev range
+  double peak_boost_psi = 0.0;     // highest boost reached in the range (0 without a blower)
+  double blower_loss_kw = 0.0;     // crank power the blower drive takes at the power peak (0 for a turbo)
   double rpm_at(int i) const { return rpm_max * i / (kPoints - 1); }
 };
 

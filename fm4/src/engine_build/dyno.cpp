@@ -24,6 +24,8 @@
 //                     the rating), air filter, manifold. Airflow and depression depend on each other, so the
 //                     operating point is solved by bisection (monotone, exact, smooth in rpm);
 //     * header tune   a bell centred on the classic primary-length rule rpm = 850 x (180 + EVO) / (length_in + 3).
+//   Forced induction (only when a blower is fitted; see "Forced induction" below) multiplies the trapped charge by
+//   the compressor's density ratio. Nitrous adds a fixed power above its arming rpm.
 //   Exhaust backpressure (manifold + pipe + muffler, each K x dynamic pressure of the hot gas) costs torque as
 //   exp(-0.25 x backpressure/atm). Combustion: Otto efficiency at gamma 1.3 scaled to real engines (times spark_tune
 //   for smog-era calibrations), a knock limit from compression (lowered by late intake closing) against fuel octane,
@@ -33,6 +35,26 @@
 // Every non-smooth operation (max, step) is a softplus or logistic so the curve has no kinks; inputs are sanitised
 // first so a zero, a NaN or an out-of-range catalogue value can not produce NaN or inf. 96 points take well
 // under a millisecond.
+//
+// Forced induction and nitrous (Heywood ch. 6-7, Taylor vol. 1 ch. 13, Bell "Maximum Boost"; constants our own):
+//   * boost vs rpm: Roots / screw (positive displacement) reach the set boost by ~1500 rpm, the drop below that is
+//     rotor leakage, a Roots sags a little at very high rpm; centrifugal boost ~ rpm^2, softly capped at the set
+//     boost; a turbo has no boost well below its spool rpm and rises over ~1000-1500 rpm (on rpm x core VE, i.e.
+//     exhaust flow, quasi-steady with no lag) to the set boost, then the wastegate holds it;
+//   * charge: PR = (14.7 + boost) / 14.7 on top of the depressed manifold pressure. Compressor rise
+//     dT/T1 = (PR^((g-1)/g) - 1) / eta, the intercooler takes ic x dT, density ratio = PR x T1 / T2. A carburettor
+//     is draw-through (upstream of the compressor): it passes the ambient-equivalent flow (VE x density ratio), so a
+//     single four-barrel chokes a blown engine, and the fuel evaporating during compression takes ~40% of dT. EFI
+//     injects after the compressor. Positive manifold pressure purges residuals (Heywood's ideal-cycle VE with
+//     p_exh / p_int), scales the backpressure loss by p_exh / p_int, and does positive pumping work on the intake
+//     stroke. Runner tuning is damped with boost;
+//   * drive: mechanical blowers take m_dot cp dT (+ belt and bearing drag) as a mean effective pressure; a turbo
+//     takes nothing from the crank but its turbine raises exhaust backpressure ~ boost;
+//   * knock: octane requirement + 0.55 per psi (pressure) + 0.07 per K of charge temperature rise after the
+//     intercooler (~1 octane / psi for a non-intercooled period blower), + 0.02 per nitrous kW; knock_margin is the
+//     worst point in the range;
+//   * nitrous: torque = kW / omega, ramped in over ~300 rpm above the arming rpm, tapering slightly at high rpm.
+// With no blower and no nitrous none of this runs, and the result is bit-for-bit the naturally aspirated model.
 // ---------------------------------------------------------------------------
 #include "dyno.h"
 
@@ -51,6 +73,10 @@ constexpr double kSoundSpeed = 346.0;   // m/s at the inlet
 constexpr double kFuelLhv = 44.0e6;     // J/kg, gasoline
 constexpr double kPowerAfr = 12.6;      // best-power air/fuel ratio
 constexpr double kCcPerCubicFoot = 28316.85;
+constexpr double kAtmPsi = 14.696;
+constexpr double kInletK = 298.0;       // compressor inlet temperature, K
+constexpr double kCpAir = 1005.0;       // J/(kg K)
+constexpr double kGammaExp = 0.4 / 1.4; // (gamma - 1) / gamma for air
 
 // Smooth max(x, 0) with knee width k.
 double SoftPos(double x, double k) {
@@ -146,6 +172,18 @@ struct Engine {
   double lift_in;                         // intake valve lift (mm) at the valve
   double fmep_rod_mult;
   double float_rpm, safe_rpm, idle_rpm;
+  // Forced induction and nitrous.
+  int blower;
+  double boost, boost_rpm, blower_eta, ic, evap;  // psi, rpm, -, -, - (draw-through fuel cooling share of dT)
+  double spool_width, ve_core_ref;                // turbo: rpm over which boost builds; core VE at boost_rpm
+  double n2o_kw, n2o_rpm;
+  bool boosted() const { return blower != kNoBlower; }
+  bool forced() const { return blower != kNoBlower || n2o_kw > 0.0; }
+};
+
+// Per-rpm extras the summary needs (only filled on the forced-induction / nitrous path).
+struct PointInfo {
+  double boost_psi = 0.0, drive_kw = 0.0, knock_margin = 0.0;
 };
 
 double CylVolume(const Engine& e, double crank_deg) {
@@ -161,6 +199,8 @@ double EffectiveLift(double lift, double dia) {
   const double sat = 0.25 * dia;
   return lift / std::cbrt(1.0 + std::pow(lift / sat, 3.0));
 }
+
+double VeCore(const Engine& e, double rpm);
 
 Engine Prepare(const EngineSpec& in) {
   Engine e{};
@@ -266,13 +306,34 @@ Engine Prepare(const EngineSpec& in) {
                                    std::pow(1.5 / rocker, 0.2);
   e.safe_rpm = std::min(e.float_rpm, Sane(in.rod_limit_rpm, 2000.0, 20000.0, 7000.0));
   e.idle_rpm = 600.0 + 9.0 * e.overlap_pos;
+
+  // Forced induction and nitrous.
+  e.blower = SaneInt(in.blower, 0, 4, kNoBlower);
+  e.boost = Sane(in.boost_psi, 0.0, 30.0, 0.0);
+  e.boost_rpm = Sane(in.boost_rpm, 0.0, 15000.0, 0.0);
+  if (e.boost_rpm < 1000.0) {
+    if (e.blower == kCentrifugal) e.boost_rpm = 0.9 * e.safe_rpm;
+    else if (e.blower == kTurbo) e.boost_rpm = std::max(2000.0, 0.5 * e.safe_rpm);
+    else e.boost_rpm = 0.0;
+  }
+  constexpr double kTypicalEta[5] = {1.0, 0.55, 0.70, 0.72, 0.70};
+  const double eta = Sane(in.blower_efficiency, 0.0, 0.9, 0.0);
+  e.blower_eta = eta >= 0.3 ? eta : kTypicalEta[e.blower];
+  e.ic = Sane(in.intercooler, 0.0, 0.95, 0.0);
+  e.evap = e.carbureted && e.carb_cfm > 0.0 ? 0.4 : 0.0;  // draw-through: fuel evaporates during compression
+  // Turbo: boost builds over ~1000-1500 rpm below the spool rpm; more boost needs more exhaust energy, so longer.
+  e.spool_width = std::min(2000.0, std::max(900.0, 0.28 * e.boost_rpm * (1.0 + e.boost / 15.0)));
+  e.ve_core_ref = e.blower == kTurbo ? std::max(0.1, VeCore(e, e.boost_rpm)) : 1.0;
+  e.n2o_kw = Sane(in.nitrous_kw, 0.0, 400.0, 0.0);
+  e.n2o_rpm = Sane(in.nitrous_rpm, 1000.0, 15000.0, 3000.0);
   return e;
 }
 
 // Intake depression (fraction of an atmosphere) at a given airflow in cfm.
-double IntakeDepression(const Engine& e, double cfm) {
+// `cfm` is ambient-equivalent; `dr` is the blower's density ratio (exactly 1 naturally aspirated).
+double IntakeDepression(const Engine& e, double cfm, double dr) {
   const double qd = cfm / e.demand_cfm_6000;
-  double dp = e.intake->flow_k * qd * qd;
+  double dp = e.intake->flow_k * qd * qd / dr;
   double ref = e.demand_cfm_6000;
   if (e.carb_cfm > 0.0) {
     const double qc = cfm / e.carb_cfm;
@@ -286,8 +347,8 @@ double IntakeDepression(const Engine& e, double cfm) {
   return dp;
 }
 
-double Torque(const Engine& e, double rpm) {
-  rpm = std::max(0.0, rpm);
+// Core VE: cam filling, valve choking and port size (everything before manifold and exhaust tuning).
+double VeCore(const Engine& e, double rpm) {
   const double sp = 2.0 * e.stroke * rpm / 60.0;  // mean piston speed m/s
 
   // Cam filling: trapped fraction at intake closing, rising to full + ram above the cam rpm.
@@ -302,11 +363,59 @@ double Torque(const Engine& e, double rpm) {
 
   // Big port: slow charge at low rpm.
   ve *= 1.0 - 0.10 * SoftPos(e.port_ratio - 1.0, 0.05) / (1.0 + (rpm / 3000.0) * (rpm / 3000.0));
+  return ve;
+}
 
-  // Intake manifold tuning.
+// u / (1 + u^8)^(1/8): ~u below 1, smoothly capped at 1 above (u >= 0).
+double SoftCap(double u) { return u / std::pow(1.0 + std::pow(u, 8.0), 0.125); }
+
+// Gauge boost (psi) at an rpm.
+double BoostAt(const Engine& e, double rpm) {
+  switch (e.blower) {
+    case kRoots:
+    case kTwinScrew: {
+      // Positive displacement: delivery per rev is fixed, rotor leakage (about fixed per second) matters only slowly.
+      const double r0 = e.boost_rpm > 0.0 ? 0.5 * e.boost_rpm : (e.blower == kRoots ? 800.0 : 650.0);
+      const double x = rpm / r0;
+      double b = e.boost * (1.0 - std::exp(-x * x));
+      if (e.blower == kRoots) b *= 1.0 - 0.08 * Rise3(rpm / 7500.0);  // hot, leaky rotors far past their sweet spot
+      return b;
+    }
+    case kCentrifugal: {
+      const double x = rpm / e.boost_rpm;
+      return e.boost * SoftCap(x * x);
+    }
+    case kTurbo: {
+      // Exhaust flow ~ rpm x VE: an "equivalent rpm" relative to the core VE at the spool rpm.
+      const double rpm_flow = rpm * VeCore(e, rpm) / e.ve_core_ref;
+      const double g = SoftPos(rpm_flow - (e.boost_rpm - e.spool_width), 150.0) / e.spool_width;
+      return e.boost * SoftCap(1.12 * g * g);  // turbine work grows ~ flow^2 until the wastegate opens
+    }
+    default:
+      return 0.0;
+  }
+}
+
+double Torque(const Engine& e, double rpm, PointInfo* info = nullptr) {
+  rpm = std::max(0.0, rpm);
+  const double sp = 2.0 * e.stroke * rpm / 60.0;  // mean piston speed m/s
+  double ve = VeCore(e, rpm);
+
+  // Forced induction: boost and charge density at this rpm (independent of the restriction solve below).
+  double boost = 0.0, pr = 1.0, dt_comp = 0.0, dt_charge = 0.0, dr = 1.0;
+  if (e.boosted()) {
+    boost = BoostAt(e, rpm);
+    pr = (kAtmPsi + boost) / kAtmPsi;
+    dt_comp = kInletK * (std::pow(pr, kGammaExp) - 1.0) / e.blower_eta;
+    dt_charge = dt_comp * (1.0 - e.evap) * (1.0 - e.ic);
+    dr = pr * kInletK / (kInletK + dt_charge);
+  }
+
+  // Intake manifold tuning (pressure waves in the runners matter much less once a blower fills the manifold).
   const IntakeStyle& is = *e.intake;
   const double li = std::log(std::max(rpm, 200.0) / e.intake_tune_rpm) / is.width;
-  ve *= 1.0 + is.gain * Bell(li);
+  if (e.boosted()) ve *= 1.0 + is.gain * (1.0 - 0.7 * boost / (boost + 2.0)) * Bell(li);
+  else ve *= 1.0 + is.gain * Bell(li);
   ve *= 1.0 - is.low_loss / (1.0 + (rpm / is.low_rpm) * (rpm / is.low_rpm));
 
   // Header tuning.
@@ -323,29 +432,46 @@ double Torque(const Engine& e, double rpm) {
   const double over = SoftPos(rpm - e.float_rpm, 250.0) / 2300.0;
   ve *= Bell(over);
 
-  // Restrictions: solve VE_actual = VE_open * exp(-depression(airflow(VE_actual))) by bisection.
+  // Restrictions: solve VE_actual = VE_open * exp(-depression(airflow(VE_actual))) by bisection. With a blower the
+  // carb and filter pass the ambient-equivalent flow (x density ratio; dr is exactly 1 without one); the manifold
+  // flows the denser charge, so its loss is divided by dr.
+  const double ve_open = ve;
   const double cfm_per_ve = e.vd_total * 1e6 * 0.5 * rpm / kCcPerCubicFoot;
   double lo = 0.0, hi = ve;
   if (cfm_per_ve > 1e-9) {
     for (int i = 0; i < 40; ++i) {
       const double mid = 0.5 * (lo + hi);
-      const double f = mid - ve * std::exp(-IntakeDepression(e, mid * cfm_per_ve));
+      const double f = mid - ve * std::exp(-IntakeDepression(e, mid * cfm_per_ve * dr, dr));
       (f > 0.0 ? hi : lo) = mid;
     }
     ve = 0.5 * (lo + hi);
   }
   // Oversized carb: weak venturi signal at low airflow, poorer mixture.
-  if (e.carbureted && e.carb_cfm > 0.0) ve *= 1.0 - 0.06 * std::exp(-(ve * cfm_per_ve / e.carb_cfm) / 0.2);
+  if (e.carbureted && e.carb_cfm > 0.0) ve *= 1.0 - 0.06 * std::exp(-(ve * dr * cfm_per_ve / e.carb_cfm) / 0.2);
+  const double p_in = ve_open > 1e-9 ? std::min(1.0, ve / ve_open) : 1.0;  // manifold pressure before the blower, atm
 
   // Exhaust backpressure: K x dynamic pressure of the hot gas in a reference 57 mm pipe (manifold) and the real pipe.
-  const double mdot = ve * kRhoAir * e.vd_total * rpm / 120.0 * (1.0 + 1.0 / kPowerAfr);
+  const double mdot = ve * dr * kRhoAir * e.vd_total * rpm / 120.0 * (1.0 + 1.0 / kPowerAfr);
   const double side = mdot * e.side_split;
   const double ref_area = 0.25 * kPi * 0.057 * 0.057;
   const double v_ref = side / kRhoExhaust / ref_area;
   const double v_pipe = side / kRhoExhaust / e.pipe_area;
   const double q_ref = 0.5 * kRhoExhaust * v_ref * v_ref, q_pipe = 0.5 * kRhoExhaust * v_pipe * v_pipe;
-  const double back = (e.header_k * q_ref + (1.4 + 7.0 * e.muffler) * q_pipe) / kAtmPa;
-  double eff = e.eta_i * std::exp(-0.25 * back);
+  const double back_pipes = (e.header_k * q_ref + (1.4 + 7.0 * e.muffler) * q_pipe) / kAtmPa;
+  // Turbine: exhaust manifold pressure rises with boost (about 0.9 x boost for a sensibly matched period turbo).
+  const double back_turbine = e.blower == kTurbo ? 0.9 * boost / kAtmPsi : 0.0;
+  const double back = e.blower == kTurbo ? back_pipes + back_turbine : back_pipes;
+  // Backpressure costs pumping work and dilution in proportion to exhaust over intake pressure, so boost offsets it.
+  double eff = e.eta_i * std::exp(-0.25 * (e.boosted() ? back / pr : back));
+
+  // Trapped charge with a blower: density ratio, plus fewer residuals when the manifold is above exhaust pressure
+  // (Heywood's ideal-cycle VE, 1 - (p_e / p_i - 1) / (gamma (r - 1)), as a ratio against no boost).
+  double ve_charge = ve;
+  if (e.boosted()) {
+    const double pe0 = 1.0 + back_pipes, pe1 = 1.0 + back;
+    const double purge = 1.0 + (pe0 / p_in - pe1 / (p_in * pr)) / (1.3 * (e.cr - 1.0));
+    ve_charge = ve * dr * Sane(purge, 0.8, 1.2, 1.0);
+  }
 
   // Combustion: heat loss at low speed, spark energy at high rpm, knock.
   const double xl = rpm / 1500.0;
@@ -353,15 +479,47 @@ double Torque(const Engine& e, double rpm) {
   if (e.ignition == kPoints) eff *= 1.0 - 0.075 * Logistic((rpm - 6100.0) / 650.0);
   else if (e.ignition == kElectronic) eff *= 1.0 - 0.025 * Logistic((rpm - 8000.0) / 700.0);
   const double knock_weight = 1.15 - 0.3 * Rise(rpm / 4000.0);
-  eff *= std::exp(-0.03 * SoftPos(-e.knock_margin, 1.0) * knock_weight);
+  double knock = 1.0, n2o_on = 0.0, margin = e.knock_margin;
+  if (e.forced()) {
+    if (e.n2o_kw > 0.0) n2o_on = Logistic((rpm - e.n2o_rpm - 150.0) / 65.0);  // 10-90% over ~290 rpm
+    margin -= 0.55 * boost + 0.07 * dt_charge + 0.02 * e.n2o_kw * n2o_on;
+    knock = std::exp(-0.03 * SoftPos(-margin, 1.0) * knock_weight);
+    eff *= knock;
+  } else {
+    eff *= std::exp(-0.03 * SoftPos(-e.knock_margin, 1.0) * knock_weight);
+  }
 
-  const double imep = eff * ve * kRhoAir * kFuelLhv / kPowerAfr;  // Pa
+  double imep = eff * ve_charge * kRhoAir * kFuelLhv / kPowerAfr;  // Pa
+  double drive_mep = 0.0;
+  if (e.boosted()) {
+    imep += (pr - 1.0) * p_in * kAtmPa;  // positive pumping work: the manifold pushes on the intake stroke
+    if (e.blower != kTurbo) {
+      // Shaft power m_dot cp dT as a mean effective pressure (m_dot / rpm is fixed, so no division by rpm), plus a
+      // little belt and bearing drag that grows with blower speed.
+      const double belt = 1.0 + 0.04 * Rise(boost / 2.0) * (rpm / 6000.0);
+      drive_mep = ve_charge * kRhoAir * kCpAir * dt_comp * belt;
+    }
+  }
 
   // Friction (fmep, kPa): rubbing + pumping vs piston speed, valve springs.
   const double spring = (e.lift_in / 11.4) * kSpringLoad[e.lifter] * (8.0 + 0.6 * sp) - kRollerRelief[e.lifter] * (1.0 + sp / 20.0);
   const double fmep = ((50.0 + 5.5 * sp + 0.30 * sp * sp) * e.fmep_rod_mult + spring) * 1e3;
 
-  const double t = (imep - fmep) * e.vd_total / (4.0 * kPi);
+  if (!e.forced()) {
+    const double t = (imep - fmep) * e.vd_total / (4.0 * kPi);
+    return SoftPos(t, 2.0);
+  }
+  double t = (imep - fmep - drive_mep) * e.vd_total / (4.0 * kPi);
+  if (n2o_on > 0.0) {
+    // Fixed N2O and fuel jets: about constant power, so torque = P / omega; distribution suffers a little up top.
+    const double w = 2.0 * kPi * rpm / 60.0, w_min = 2.0 * kPi * 600.0 / 60.0;
+    t += e.n2o_kw * 1e3 * n2o_on * (1.0 - 0.08 * Rise3(rpm / 8000.0)) * knock / std::sqrt(w * w + w_min * w_min);
+  }
+  if (info) {
+    info->boost_psi = boost;
+    info->drive_kw = drive_mep * e.vd_total * rpm / 120.0 * 1e-3;
+    info->knock_margin = margin;
+  }
   return SoftPos(t, 2.0);
 }
 
@@ -376,18 +534,23 @@ DynoResult RunDyno(const EngineSpec& spec, double rpm_max) {
   DynoResult r;
   r.rpm_max = Sane(rpm_max, 1000.0, 20000.0, 10000.0);
   const Engine e = Prepare(spec);
+  r.knock_margin = e.knock_margin;
   for (int i = 0; i < DynoResult::kPoints; ++i) {
     const double rpm = r.rpm_at(i);
-    const double t = Torque(e, rpm);
+    PointInfo info;
+    const double t = Torque(e, rpm, e.forced() ? &info : nullptr);
     r.torque_nm[i] = t;
     if (t > r.peak_torque_nm) { r.peak_torque_nm = t; r.peak_torque_rpm = rpm; }
     const double kw = t * rpm * 2.0 * kPi / 60.0 * 1e-3;
-    if (kw > r.peak_power_kw) { r.peak_power_kw = kw; r.peak_power_rpm = rpm; }
+    if (kw > r.peak_power_kw) { r.peak_power_kw = kw; r.peak_power_rpm = rpm; r.blower_loss_kw = info.drive_kw; }
+    if (e.forced()) {
+      r.peak_boost_psi = std::max(r.peak_boost_psi, info.boost_psi);
+      r.knock_margin = std::min(r.knock_margin, info.knock_margin);
+    }
   }
   r.valve_float_rpm = e.float_rpm;
   r.safe_rpm = e.safe_rpm;
   r.idle_rpm = e.idle_rpm;
-  r.knock_margin = e.knock_margin;
   return r;
 }
 

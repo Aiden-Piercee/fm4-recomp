@@ -129,6 +129,10 @@ class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
       ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
                          "FM4 engine upgrades are fitted from the upgrade shop. Their gains are cancelled while a build is "
                          "active%s.", car.fm4_cam_upgraded ? "; the FM4 camshaft's curve shape still applies" : "");
+    if (car.fm4_fi_upgraded && car.parts[kBlowerSlot] > 0)
+      ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                         "An FM4 shop turbo / supercharger is fitted, so the builder's blower is ignored. Take the FM4 one "
+                         "off in the upgrade shop to use it.");
   }
 
   void DrawSlots(const Catalogue& cat, const CarState& car) {
@@ -149,36 +153,47 @@ class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
   void DrawParts(const Catalogue& cat, const StockEngine& e, const CarState& car) {
     const int year_limit = DecadeYearLimit();
     ImGui::TextDisabled("%s  %s", SlotName(slot_), year_limit > 0 ? ("(on sale to " + std::to_string(year_limit) + ")").c_str() : "");
-    const auto parts = cat.PartsFor(slot_, e.family, year_limit);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show later parts", &show_later_);
+    const auto parts = cat.PartsFor(slot_, e.family, (year_limit > 0 && !show_later_) ? year_limit : 0);
     const int32_t fitted = car.parts[slot_];
     if (ImGui::Selectable(fitted == 0 ? "> Stock" : "  Stock", preview_ == 0)) preview_ = 0;
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) FitPart(slot_, 0);
     for (const Part* p : parts) {
+      // A part from a later decade can be previewed on the dyno but only fitted once that decade is unlocked.
+      const bool later = year_limit > 0 && p->year > year_limit;
       char label[256];
-      std::snprintf(label, sizeof label, "%s%s  (%d)##p%d", p->id == fitted ? "> " : "  ", PartLabel(p).c_str(), p->year, p->id);
+      std::snprintf(label, sizeof label, "%s%s  (%d)%s##p%d", p->id == fitted ? "> " : "  ", PartLabel(p).c_str(), p->year,
+                    later ? "  later decade" : "", p->id);
+      if (later) ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
       if (ImGui::Selectable(label, preview_ == p->id)) preview_ = p->id;
-      if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) FitPart(slot_, p->id);
+      if (later) ImGui::PopStyleColor();
+      if (!later && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) FitPart(slot_, p->id);
     }
     if (parts.empty()) ImGui::TextDisabled("No parts for this engine in this slot yet.");
     ImGui::Spacing();
+    const Part* pv = preview_ > 0 ? cat.FindPart(preview_) : nullptr;
+    const bool pv_later = pv && year_limit > 0 && pv->year > year_limit;
     if (preview_ >= 0 && preview_ != fitted) {
-      if (ImGui::Button("Fit this part")) { FitPart(slot_, preview_); preview_ = -1; }
-      ImGui::SameLine();
-      ImGui::TextDisabled("(or double-click)");
-    }
-    if (preview_ > 0) {
-      if (const Part* p = cat.FindPart(preview_)) {
-        ImGui::Separator();
-        ImGui::TextWrapped("%s", PartLabel(p).c_str());
-        ImGui::Text("Year %d   Mass %+.1f kg   Price %d CR (free in this version)", p->year, p->mass_kg, p->price);
-        std::string mods;
-        for (const Mod& m : p->mods) {
-          char buf[64];
-          std::snprintf(buf, sizeof buf, "%s%s%g  ", m.key.c_str(), m.op == '=' ? "=" : m.op == '+' ? "+=" : "*=", m.value);
-          mods += buf;
-        }
-        ImGui::TextWrapped("%s", mods.c_str());
+      if (pv_later) {
+        ImGui::TextDisabled("On sale from %d: unlock the %ds in Evolution to fit it.", pv->year, pv->year / 10 * 10);
+      } else {
+        if (ImGui::Button("Fit this part")) { FitPart(slot_, preview_); preview_ = -1; }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(or double-click)");
       }
+    }
+    if (pv) {
+      ImGui::Separator();
+      ImGui::TextWrapped("%s", PartLabel(pv).c_str());
+      ImGui::Text("Year %d   Mass %+.1f kg   Price %d CR (free in this version)", pv->year, pv->mass_kg, pv->price);
+      std::string mods;
+      for (const Mod& m : pv->mods) {
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%s%s%g  ", m.key.c_str(), m.op == '=' ? "=" : m.op == '+' ? "+=" : "*=", m.value);
+        mods += buf;
+      }
+      ImGui::TextWrapped("%s", mods.c_str());
     }
   }
 
@@ -202,9 +217,13 @@ class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
     const bool show_prev = std::memcmp(preview_parts, car.parts, sizeof preview_parts) != 0;
 
     auto stats = [](const char* name, const DynoResult& r, ImVec4 col) {
-      ImGui::TextColored(col, "%-8s %4.0f Nm @ %4.0f   %4.0f hp @ %4.0f   safe %4.0f rpm%s", name, r.peak_torque_nm,
-                         r.peak_torque_rpm, r.peak_power_kw * kKwToHp, r.peak_power_rpm, r.safe_rpm,
-                         r.knock_margin < 0.0 ? "   KNOCK: too much compression for the fuel" : "");
+      char boost[48] = "";
+      if (r.peak_boost_psi > 0.05) std::snprintf(boost, sizeof boost, "   %.1f psi", r.peak_boost_psi);
+      ImGui::TextColored(col, "%-8s %4.0f Nm @ %4.0f   %4.0f hp @ %4.0f   safe %4.0f rpm%s%s", name, r.peak_torque_nm,
+                         r.peak_torque_rpm, r.peak_power_kw * kKwToHp, r.peak_power_rpm, r.safe_rpm, boost,
+                         r.knock_margin < 0.0 ? (r.peak_boost_psi > 0.05 ? "   KNOCK: too much compression or boost for the fuel"
+                                                                         : "   KNOCK: too much compression for the fuel")
+                                              : "");
     };
     const ImVec4 c_stock(0.62f, 0.62f, 0.62f, 1.0f), c_build(1.0f, 0.55f, 0.15f, 1.0f), c_prev(0.35f, 0.7f, 1.0f, 1.0f);
     stats("Stock", stock_, c_stock);
@@ -266,6 +285,7 @@ class EngineBuilderOverlay : public rex::ui::ImGuiDialog {
   }
 
   bool open_ = false;
+  bool show_later_ = true;  // list parts from locked decades (greyed, preview only)
   int slot_ = kCam;
   int32_t preview_ = -1;  // -1 none, 0 stock, else PartId
   int cache_engine_ = -1;

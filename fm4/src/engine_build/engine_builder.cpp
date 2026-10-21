@@ -54,7 +54,7 @@ namespace {
 
 constexpr uint32_t kCurrentEventIdAddr = 0x82DDB228;  // written at race start (sub_82492210), see hooks.cpp
 constexpr float kRadPerRpm = 0.10471976f;
-constexpr float kRatioMin = 0.35f, kRatioMax = 2.2f;
+constexpr float kRatioMin = 0.35f, kRatioMax = 3.2f;  // a blown or nitrous build can triple the stock torque
 
 std::mutex g_mu;
 Catalogue g_cat;
@@ -90,6 +90,13 @@ uint32_t LoadBE32(uint32_t a) {
   return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | uint32_t(p[3]);
 }
 
+// The parts the model uses: the fitted parts, minus the blower when an FM4 shop turbo / supercharger is fitted (FM4
+// applies its own forced-induction model on top of the curve, so a builder blower would boost twice).
+void EffectiveParts(const int32_t (&in)[kNumSlots], int32_t (&out)[kNumSlots]) {
+  std::memcpy(out, in, sizeof out);
+  if (g_car.fm4_fi_upgraded) out[kBlowerSlot] = 0;
+}
+
 // Rebuilds g_live from g_car. Caller holds g_mu.
 void RebuildLocked() {
   LiveBuild live;
@@ -99,7 +106,9 @@ void RebuildLocked() {
   if (!e || !g_car.info_ok || !g_car.build_ok || !any) { g_live = live; return; }
   live.rpm_max = std::max(10000.0, g_car.curve_max_rpm * 1.1);
   const DynoResult stock = RunDyno(StockSpec(*e), live.rpm_max);
-  const DynoResult built = RunDyno(BuildSpec(g_cat, *e, g_car.parts), live.rpm_max);
+  int32_t parts[kNumSlots];
+  EffectiveParts(g_car.parts, parts);
+  const DynoResult built = RunDyno(BuildSpec(g_cat, *e, parts), live.rpm_max);
   const double scale = g_car.fm4_upgrade_scale > 0.05 ? g_car.fm4_upgrade_scale : 1.0;
   // Below about 600 rpm the stock torque is tiny and the ratio meaningless: hold the first usable ratio.
   int first = 0;
@@ -122,12 +131,14 @@ void RebuildLocked() {
               g_car.garage_id, g_car.engine_id, stock.peak_torque_nm, stock.peak_torque_rpm, stock.peak_power_kw,
               stock.peak_power_rpm, built.peak_torque_nm, built.peak_torque_rpm, built.peak_power_kw, built.peak_power_rpm,
               built.safe_rpm, live.limiter_rpm, scale, g_car.fm4_cam_upgraded ? " (FM4 cam upgrade fitted: its shape stays)" : "");
+  if (g_car.fm4_fi_upgraded && g_car.parts[kBlowerSlot] > 0)
+    REXLOG_INFO("Engine builder: garage {}: FM4 shop forced induction fitted, the builder blower is ignored", g_car.garage_id);
 }
 
 // ---- database reads (game thread callbacks) -------------------------------------------------------------------------
 constexpr const char* kInfoCols[] = {"EID", "CAR", "YR", "SRED", "FRED", "TCMAX", "SC", "CAMUP"};
 constexpr int kNumInfoCols = 8;
-constexpr const char* kBuildCols[] = {"S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"};
+constexpr const char* kBuildCols[] = {"S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11"};
 static_assert(sizeof(kBuildCols) / sizeof(kBuildCols[0]) == kNumSlots);
 
 void OnInfo(const int32_t* v, int n) {
@@ -160,6 +171,19 @@ void OnBuild(const int32_t* v, int n) {
   if (g_car.garage_id != g_pending_garage) return;
   for (int s = 0; s < kNumSlots; ++s) g_car.parts[s] = (v && n == kNumSlots && v[s] > 0) ? v[s] : 0;
   g_car.build_ok = true;  // no row = no build, which is a valid answer
+  RebuildLocked();
+}
+
+// FM4 shop forced induction (non-stock turbo or supercharger rows). A failed read (column names differ) leaves it off.
+void OnForced(const int32_t* v, int n) {
+  std::lock_guard<std::mutex> lock(g_mu);
+  if (g_car.garage_id != g_pending_garage) return;
+  if (!v || n < 1) {
+    REXLOG_WARN("Engine builder: garage {}: FM4 forced-induction row not read (assumed none)", g_car.garage_id);
+    return;
+  }
+  g_car.fm4_fi_upgraded = v[0] != 0;
+  if (g_car.fm4_fi_upgraded) REXLOG_INFO("Engine builder: garage {}: FM4 shop turbo / supercharger fitted", g_car.garage_id);
   RebuildLocked();
 }
 
@@ -204,6 +228,18 @@ void QueueReads(int garage) {
              std::to_string(s);
   build += " FROM {P}Evolution_EngineBuild WHERE GarageId=" + gid;
   EvoDbRead(build.c_str(), kBuildCols, kNumSlots, &OnBuild);
+  // Career_Garage names its upgrade columns after the List_UpgradeEngine* tables (Camshaft, Valves, ...).
+  static constexpr const char* kFiCols[] = {"FI"};
+  const std::string fi =
+      "SELECT CASE WHEN COALESCE(ts.IsStock,1)=0 OR COALESCE(tt.IsStock,1)=0 OR COALESCE(tq.IsStock,1)=0 "
+      "OR COALESCE(ds.IsStock,1)=0 OR COALESCE(cs.IsStock,1)=0 THEN 1 ELSE 0 END AS FI FROM {P}Career_Garage g "
+      "LEFT JOIN List_UpgradeEngineTurboSingle ts ON ts.Id=g.TurboSingle "
+      "LEFT JOIN List_UpgradeEngineTurboTwin tt ON tt.Id=g.TurboTwin "
+      "LEFT JOIN List_UpgradeEngineTurboQuad tq ON tq.Id=g.TurboQuad "
+      "LEFT JOIN List_UpgradeEngineDSC ds ON ds.Id=g.DSC "
+      "LEFT JOIN List_UpgradeEngineCSC cs ON cs.Id=g.CSC "
+      "WHERE g.Id=" + gid + " LIMIT 1";
+  EvoDbRead(fi.c_str(), kFiCols, 1, &OnForced);
 }
 
 // Game thread, once per frame.
@@ -324,8 +360,9 @@ void ClearBuild() {
 DynoResult RunFor(const StockEngine& e, const int32_t (*parts)[kNumSlots]) {
   std::lock_guard<std::mutex> lock(g_mu);
   const double rpm_max = std::max(10000.0, g_car.curve_max_rpm * 1.1);
-  if (!parts) return RunDyno(BuildSpec(g_cat, e, g_car.parts), rpm_max);
-  return RunDyno(BuildSpec(g_cat, e, *parts), rpm_max);
+  int32_t eff[kNumSlots];
+  EffectiveParts(parts ? *parts : g_car.parts, eff);
+  return RunDyno(BuildSpec(g_cat, e, eff), rpm_max);
 }
 
 }  // namespace eb

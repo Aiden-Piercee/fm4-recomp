@@ -316,6 +316,195 @@ int main(int argc, char** argv) {
     Check(TorqueAt(RunDyno(p), 2000) < TorqueAt(b, 2000), "oversized port volume: less torque at 2000");
   }
 
+  // --- Forced induction and nitrous ----------------------------------------------------------------------------------
+  {
+    // NA unchanged: golden numbers of the baseline from the model before forced induction was added (relative 1e-12,
+    // so a different libm still passes), and stray blower / nitrous fields without a blower or a shot change nothing.
+    const double gold[7] = {0x1.dd862c0a33309p+8, 0x1.cd0797f4ad5bep+7, 0x1.666d3fea853afp+8, 0x1.d9f6656d78fc8p+8,
+                            0x1.a08d2cd37bb32p+8, 0x1.7fc98f0c8a0d9p+7, 0x1.199999999998p+1};
+    const double now[7] = {b.peak_torque_nm, b.peak_power_kw, b.torque_nm[10], b.torque_nm[30], b.torque_nm[50],
+                           b.torque_nm[70], b.knock_margin};
+    bool same = true;
+    for (int i = 0; i < 7; ++i) same = same && std::fabs(now[i] - gold[i]) <= 1e-12 * std::fabs(gold[i]);
+    Check(same, "NA baseline matches the pre-forced-induction model");
+    EngineSpec stray = base;
+    stray.boost_psi = 12; stray.boost_rpm = 4000; stray.blower_efficiency = 0.6; stray.intercooler = 0.7;
+    stray.nitrous_rpm = 2500;
+    const DynoResult rs = RunDyno(stray);
+    Check(!std::memcmp(rs.torque_nm, b.torque_nm, sizeof b.torque_nm) && rs.knock_margin == b.knock_margin &&
+              rs.peak_boost_psi == 0.0 && rs.blower_loss_kw == 0.0,
+          "no blower, no nitrous: FI fields ignored, bit-identical");
+  }
+  {
+    // Low-compression 350 with a pair of four-barrels (1200 cfm), as for a 6-71 street blower build.
+    EngineSpec na = base;
+    na.compression = 8.0;
+    na.carb_cfm = 1200;
+    const DynoResult rn = RunDyno(na);
+    auto with = [&](int type, double psi, double brpm = 0.0) {
+      EngineSpec s = na;
+      s.blower = type; s.boost_psi = psi; s.boost_rpm = brpm;
+      return s;
+    };
+    const DynoResult roots = RunDyno(with(kRoots, 7)), screw = RunDyno(with(kTwinScrew, 7));
+    const DynoResult cent = RunDyno(with(kCentrifugal, 8)), turbo = RunDyno(with(kTurbo, 8, 3500));
+    const double g_roots = roots.peak_power_kw / rn.peak_power_kw - 1.0;
+    Check(g_roots > 0.30 && g_roots < 0.60, "Roots 7 psi on 8:1: peak power +30..60%", "%+.1f%% (%.0f hp)",
+          100.0 * g_roots, roots.peak_power_kw / 0.7457);
+    Check(TorqueAt(roots, 2000) > TorqueAt(rn, 2000) * 1.25, "Roots: big gain already at 2000", "%.3f",
+          TorqueAt(roots, 2000) / TorqueAt(rn, 2000));
+    Check(std::fabs(roots.peak_boost_psi - 7.0) < 0.3, "Roots: peak boost near the set boost", "%.2f psi",
+          roots.peak_boost_psi);
+    Check(roots.blower_loss_kw > 10.0 && roots.blower_loss_kw < 0.15 * roots.peak_power_kw,
+          "Roots: drive loss recorded, 10 kW .. 15% of power", "%.1f kW", roots.blower_loss_kw);
+    Check(screw.peak_power_kw > roots.peak_power_kw && screw.blower_loss_kw < roots.blower_loss_kw,
+          "twin-screw (more efficient) beats Roots, less drive loss");
+    Check(TorqueAt(roots, 1000) / TorqueAt(roots, 2500) < TorqueAt(rn, 1000) / TorqueAt(rn, 2500),
+          "Roots: leakage droop at very low rpm");
+    const double g_cent = cent.peak_power_kw / rn.peak_power_kw - 1.0;
+    Check(TorqueAt(cent, 2000) / TorqueAt(rn, 2000) < TorqueAt(roots, 2000) / TorqueAt(rn, 2000) - 0.15,
+          "centrifugal: much smaller low-rpm gain than Roots", "%.3f vs %.3f", TorqueAt(cent, 2000) / TorqueAt(rn, 2000),
+          TorqueAt(roots, 2000) / TorqueAt(rn, 2000));
+    Check(g_cent > 0.30 && std::fabs(g_cent - g_roots) < 0.15, "centrifugal 8 psi: similar peak gain (> 30%)",
+          "%+.1f%% vs %+.1f%%", 100.0 * g_cent, 100.0 * g_roots);
+    Check(std::fabs(TorqueAt(turbo, 2000) / TorqueAt(rn, 2000) - 1.0) < 0.01, "turbo: no effect well below spool",
+          "%.4f", TorqueAt(turbo, 2000) / TorqueAt(rn, 2000));
+    Check(Band(turbo, 4000, 5500) > Band(rn, 4000, 5500) * 1.25, "turbo: big gain above spool (> 25%)", "%.3f",
+          Band(turbo, 4000, 5500) / Band(rn, 4000, 5500));
+    Check(turbo.peak_power_kw > rn.peak_power_kw * 1.25 && turbo.blower_loss_kw == 0.0,
+          "turbo: clearly more power, no shaft loss", "%+.1f%%", 100.0 * (turbo.peak_power_kw / rn.peak_power_kw - 1.0));
+    const DynoResult early = RunDyno(with(kTurbo, 8, 2800));
+    Check(TorqueAt(early, 3000) > TorqueAt(turbo, 3000) * 1.05, "turbo: earlier spool rpm, more at 3000");
+    EngineSpec ic = with(kTurbo, 8, 3500);
+    ic.intercooler = 0.7;
+    const DynoResult ric = RunDyno(ic);
+    Check(ric.peak_power_kw > turbo.peak_power_kw && ric.knock_margin > turbo.knock_margin,
+          "intercooler: more power, more knock margin");
+    EngineSpec lo = with(kRoots, 5), hi = with(kRoots, 10);
+    lo.fuel_octane = hi.fuel_octane = 112;
+    Check(RunDyno(hi).peak_power_kw > RunDyno(lo).peak_power_kw * 1.08, "more boost (good fuel): more power");
+    // Draw-through carb passes the ambient-equivalent flow, so a single 600 on a blown engine chokes.
+    EngineSpec small = with(kRoots, 7);
+    small.carb_cfm = 600;
+    EngineSpec na600 = na;
+    na600.carb_cfm = 600;
+    const double loss_blown = 1.0 - RunDyno(small).peak_power_kw / roots.peak_power_kw;
+    const double loss_na = 1.0 - RunDyno(na600).peak_power_kw / rn.peak_power_kw;
+    Check(loss_blown > 0.06 && loss_blown > 1.5 * loss_na, "600 cfm carb chokes a blown 350 (vs 1200)",
+          "-%.1f%% blown vs -%.1f%% NA", 100.0 * loss_blown, 100.0 * loss_na);
+    // Intake runner tuning matters much less with a blower.
+    EngineSpec tr = na, trb = with(kRoots, 10);
+    tr.intake = trb.intake = kTunnelRam;
+    trb.fuel_octane = 112;
+    EngineSpec dpb = with(kRoots, 10);
+    dpb.fuel_octane = 112;
+    const double tune_na = Band(RunDyno(tr), 6000, 7000) / Band(rn, 6000, 7000);
+    const double tune_b = Band(RunDyno(trb), 6000, 7000) / Band(RunDyno(dpb), 6000, 7000);
+    Check(tune_b < tune_na, "intake tuning damped with a blower", "%.3f vs %.3f NA", tune_b, tune_na);
+
+    // Smoothness with a blower.
+    double worst = 0.0;
+    for (int type = kRoots; type <= kTurbo; ++type)
+      for (double psi : {4.0, 8.0, 15.0}) {
+        EngineSpec s = with(type, psi);
+        s.fuel_octane = 110;
+        const DynoResult r = RunDyno(s);
+        worst = std::fmax(worst, MaxJump(r, r.safe_rpm + 500.0));
+      }
+    Check(worst < 0.06, "blowers 4-15 psi smooth (max step < 6% of peak)", "%.3f", worst);
+  }
+  {
+    // Knock: boost raises the octane requirement (~1 / psi without an intercooler).
+    EngineSpec hi = base, lo = base;
+    hi.compression = 10.5; lo.compression = 8.0;
+    hi.fuel_octane = lo.fuel_octane = 100;
+    hi.carb_cfm = lo.carb_cfm = 1200;
+    const DynoResult hna = RunDyno(hi);
+    hi.blower = lo.blower = kRoots;
+    hi.boost_psi = lo.boost_psi = 8;
+    const DynoResult hb = RunDyno(hi), lb = RunDyno(lo);
+    Check(hna.knock_margin > 0.0 && hb.knock_margin < -3.0, "10.5:1 + 8 psi on 100 octane knocks hard",
+          "%+.1f NA -> %+.1f", hna.knock_margin, hb.knock_margin);
+    Check(lb.knock_margin > 0.0, "8:1 + 8 psi on 100 octane is fine", "%+.1f", lb.knock_margin);
+    Check(hb.peak_power_kw < lb.peak_power_kw, "knocking high-CR blown engine makes less than the 8:1",
+          "%.0f vs %.0f kW", hb.peak_power_kw, lb.peak_power_kw);
+    const double per_psi = (hna.knock_margin - hb.knock_margin) / 8.0;
+    Check(per_psi > 0.8 && per_psi < 1.3, "about 1 octane per psi, non-intercooled", "%.2f", per_psi);
+    hi.intercooler = 0.7;
+    Check(RunDyno(hi).knock_margin > hb.knock_margin + 1.5, "intercooler lowers the requirement");
+  }
+  {
+    // Nitrous: +kW above the arming rpm, ramped in, a little knock.
+    EngineSpec n = base;
+    n.nitrous_kw = 100;
+    n.nitrous_rpm = 3000;
+    const DynoResult rn = RunDyno(n);
+    const double dkw = rn.peak_power_kw - b.peak_power_kw;
+    Check(dkw > 85.0 && dkw < 101.0, "100 kW nitrous: +85..101 kW peak", "%+.1f kW", dkw);
+    Check(std::fabs(TorqueAt(rn, 2500) / TorqueAt(b, 2500) - 1.0) < 1e-3, "nitrous: nothing below the arming rpm");
+    Check(rn.knock_margin < b.knock_margin - 1.0 && rn.knock_margin > b.knock_margin - 4.0,
+          "nitrous: knock margin down a little", "%+.1f -> %+.1f", b.knock_margin, rn.knock_margin);
+    // Smooth ramp: the added torque rises monotonically through the ramp (3000-3300) and never exceeds kW / omega.
+    bool mono = true, bounded = true;
+    double prev = 0.0;
+    const DynoResult fn = RunDyno(n, 4000), fb = RunDyno(base, 4000);
+    for (double rpm = 2600; rpm <= 3800; rpm += 20) {
+      const double d = TorqueAt(fn, rpm) - TorqueAt(fb, rpm);
+      if (rpm <= 3300) mono = mono && d >= prev - 1e-6;  // through the ramp; above it kW / omega falls
+      bounded = bounded && d <= 1.001 * 100e3 / (rpm * 2.0 * 3.14159265358979 / 60.0);
+      prev = d;
+    }
+    Check(mono && bounded, "nitrous ramps in smoothly, at most kW / omega");
+    EngineSpec big = n, huge = n;
+    big.nitrous_kw = 400; huge.nitrous_kw = 5000;
+    Check(RunDyno(huge).peak_power_kw == RunDyno(big).peak_power_kw, "nitrous clamped to 400 kW");
+  }
+  {
+    // No NaN / inf for any boost 0-25 psi, any type, odd inputs; random blown engines stay finite and smooth enough.
+    bool ok = true;
+    for (int type = -1; type <= 6; ++type)
+      for (double psi = 0.0; psi <= 25.0; psi += 0.5)
+        for (double brpm : {0.0, 500.0, 2500.0, 6000.0}) {
+          EngineSpec s = base;
+          s.blower = type; s.boost_psi = psi; s.boost_rpm = brpm; s.nitrous_kw = psi * 10.0;
+          const DynoResult r = RunDyno(s);
+          ok = ok && AllFinite(r) && std::isfinite(r.peak_boost_psi) && std::isfinite(r.blower_loss_kw) &&
+               r.peak_torque_nm > 0.0;
+        }
+    EngineSpec odd = base;
+    odd.blower = kTurbo; odd.boost_psi = std::nan(""); odd.boost_rpm = -1e9; odd.blower_efficiency = 1e9;
+    odd.intercooler = -5; odd.nitrous_kw = std::nan(""); odd.nitrous_rpm = std::nan("");
+    EngineSpec zero;
+    std::memset(static_cast<void*>(&zero), 0, sizeof(zero));
+    zero.blower = kRoots; zero.boost_psi = 25; zero.nitrous_kw = 400; zero.nitrous_rpm = 0;
+    for (const EngineSpec* s : {&odd, &zero})
+      for (double rmax : {0.0, 3000.0, 20000.0}) ok = ok && AllFinite(RunDyno(*s, rmax));
+    Check(ok, "boost 0-25 psi, every type, odd inputs: finite");
+
+    unsigned state = 777u;
+    auto rnd = [&](double lo, double hi) {
+      state = state * 1664525u + 1013904223u;
+      return lo + (hi - lo) * ((state >> 8) & 0xFFFFFF) / double(0xFFFFFF);
+    };
+    int bad = 0, rough = 0;
+    double worst = 0.0;
+    for (int i = 0; i < 1500; ++i) {
+      EngineSpec s = base;
+      s.compression = rnd(7.0, 11.0); s.fuel_octane = rnd(91, 112); s.carb_cfm = rnd(0, 1) < 0.3 ? 0.0 : rnd(400, 1600);
+      s.carbureted = s.carb_cfm > 0.0; s.intake_duration = rnd(195, 260); s.exhaust_duration = s.intake_duration + 8;
+      s.header = int(rnd(0, 4.99)); s.intake = int(rnd(0, 4.99)); s.lifter = int(rnd(0, 3.99));
+      s.blower = int(rnd(1, 4.99)); s.boost_psi = rnd(0, 25); s.boost_rpm = rnd(0, 1) < 0.5 ? 0.0 : rnd(2000, 7000);
+      s.blower_efficiency = rnd(0, 1) < 0.5 ? 0.0 : rnd(0.45, 0.8); s.intercooler = rnd(0, 0.8);
+      const DynoResult r = RunDyno(s);
+      if (!AllFinite(r) || r.peak_torque_nm <= 0.0) ++bad;
+      const double j = MaxJump(r, r.safe_rpm + 500.0);
+      worst = std::fmax(worst, j);
+      rough += j > 0.08;
+    }
+    Check(bad == 0, "fuzz: 1500 random blown engines finite", "%.0f bad", bad);
+    Check(rough == 0, "fuzz: blown max step < 8% of peak to safe rpm + 500", "worst %.3f", worst);
+  }
+
   // --- Speed --------------------------------------------------------------------------------------------------------
   {
     const auto t0 = std::chrono::steady_clock::now();
@@ -355,11 +544,13 @@ int main(int argc, char** argv) {
           double(cat.engines.size()), double(cat.parts.size()));
     for (const std::string& err : cat.errors) std::printf("      %s\n", err.c_str());
     // Every part on every engine it fits: finite, smooth, a build/stock ratio inside 0.5..1.8 over 1500 rpm .. stock
-    // safe rpm, and no single part adding more than 45% peak power.
-    bool ok = true;
-    int ratio_bad = 0, gain_bad = 0, builds = 0;
-    double rmin = 9.0, rmax = 0.0, gmax = 0.0;
-    std::string rmin_at, rmax_at, gmax_at;
+    // safe rpm, and no single part adding more than 45% peak power. Blower and nitrous parts are meant to add far more,
+    // so they have their own rules: finite, a ratio within 0.5..3.2 (the physics clamp), a blower smooth (step < 8%;
+    // the nitrous ramp is a deliberate ~300 rpm step), and their highest ratio, best gain and worst knock reported.
+    bool ok = true, fi_ok = true;
+    int ratio_bad = 0, gain_bad = 0, builds = 0, fi_builds = 0, fi_low = 0, fi_knock = 0;
+    double rmin = 9.0, rmax = 0.0, gmax = 0.0, fi_rmin = 9.0, fi_rmax = 0.0, fi_gmax = 0.0, fi_jump = 0.0, fi_kmin = 99.0;
+    std::string rmin_at, rmax_at, gmax_at, fi_rmin_at, fi_rmax_at, fi_gmax_at, fi_kmin_at;
     for (const auto& [id, e] : cat.engines) {
       const DynoResult r = RunDyno(StockSpec(e));
       if (!AllFinite(r) || MaxJump(r) > 0.06 || r.peak_torque_nm <= 0.0) {
@@ -371,12 +562,34 @@ int main(int argc, char** argv) {
         int32_t parts[kNumSlots] = {};
         parts[p.slot] = pid;
         const DynoResult rp = RunDyno(BuildSpec(cat, e, parts));
+        const std::string tag = std::to_string(id) + "+" + std::to_string(pid) + " " + p.name;
+        const double g = rp.peak_power_kw / r.peak_power_kw - 1.0;
+        if (p.slot == kBlowerSlot || p.slot == kNitrousSlot) {
+          ++fi_builds;
+          const double j = p.slot == kBlowerSlot ? MaxJump(rp, rp.safe_rpm + 500.0) : 0.0;
+          fi_jump = std::fmax(fi_jump, j);
+          if (!AllFinite(rp) || rp.peak_torque_nm <= 0.0 || j > 0.08) {
+            fi_ok = false;
+            std::printf("      engine %d + part %d not sane\n", int(id), int(pid));
+          }
+          bool low = false;
+          for (double rpm = 1500.0; rpm <= r.safe_rpm; rpm += 100.0) {
+            const double q = TorqueAt(rp, rpm) / TorqueAt(r, rpm);
+            if (q < fi_rmin) { fi_rmin = q; fi_rmin_at = tag + " @" + std::to_string(int(rpm)); }
+            if (q > fi_rmax) { fi_rmax = q; fi_rmax_at = tag + " @" + std::to_string(int(rpm)); }
+            low = low || q < 0.5 || q > 3.2;
+          }
+          fi_low += low;
+          fi_knock += rp.knock_margin < 0.0;
+          if (rp.knock_margin < fi_kmin) { fi_kmin = rp.knock_margin; fi_kmin_at = tag; }
+          if (g > fi_gmax) { fi_gmax = g; fi_gmax_at = tag; }
+          continue;
+        }
         ++builds;
         if (!AllFinite(rp) || MaxJump(rp, rp.safe_rpm + 500.0) > 0.06 || rp.peak_torque_nm <= 0.0) {
           ok = false;
           std::printf("      engine %d + part %d not sane\n", int(id), int(pid));
         }
-        const std::string tag = std::to_string(id) + "+" + std::to_string(pid) + " " + p.name;
         bool rb = false;
         for (double rpm = 1500.0; rpm <= r.safe_rpm; rpm += 100.0) {
           const double q = TorqueAt(rp, rpm) / TorqueAt(r, rpm);
@@ -385,7 +598,6 @@ int main(int argc, char** argv) {
           rb = rb || q < 0.5 || q > 1.8;
         }
         ratio_bad += rb;
-        const double g = rp.peak_power_kw / r.peak_power_kw - 1.0;
         if (g > gmax) { gmax = g; gmax_at = tag; }
         gain_bad += g > 0.45;
       }
@@ -395,6 +607,14 @@ int main(int argc, char** argv) {
     Check(ratio_bad == 0, "single-part build/stock ratio within 0.5..1.8", "%.0f builds outside", ratio_bad);
     Check(gain_bad == 0, "no single part adds > 45% peak power", "%.0f parts over", gain_bad);
     Check(ok, "every stock engine and single-part build is finite and smooth");
+    if (fi_builds) {
+      std::printf("      %d blower / nitrous builds; ratio range %.3f (%s) .. %.3f (%s); best power gain %+.1f%% (%s); "
+                  "worst blower step %.3f\n", fi_builds, fi_rmin, fi_rmin_at.c_str(), fi_rmax, fi_rmax_at.c_str(),
+                  100.0 * fi_gmax, fi_gmax_at.c_str(), fi_jump);
+      std::printf("      %d of them knock (margin < 0); worst %+.1f (%s)\n", fi_knock, fi_kmin, fi_kmin_at.c_str());
+      Check(fi_ok, "blower / nitrous builds finite, blowers smooth (< 8%)");
+      Check(fi_low == 0, "blower / nitrous build/stock ratio within 0.5..3.2", "%.0f builds outside", fi_low);
+    }
   }
 
   std::printf("%d passed, %d failed\n", g_pass, g_fail);
